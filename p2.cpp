@@ -199,55 +199,6 @@ boost::asio::awaitable<void> serve_pairs(tcp::socket socket_p0,
 }
 
 
-/*boost::asio::awaitable<void> serve_mult_triple(tcp::socket &socket_p0,
-                                         tcp::socket &socket_p1,
-                                         int q,
-                                         int k)
-{
-    try {
-        std::cout << "P2: streaming " << q << " multiplication triples (k=" << k << ") to P0 and P1\n";
-
-        // First send a header line to each client
-        std::string header = serialize_triples_header(q, k);
-        co_await send_text(socket_p0, header);
-        co_await send_text(socket_p1, header);
-
-        for (int i = 0; i < q; ++i) {
-            const std::string size_line = std::to_string(k) + "\n";
-
-            co_await boost::asio::async_write(socket_p0,
-                boost::asio::buffer(size_line), boost::asio::use_awaitable);
-
-            co_await boost::asio::async_write(socket_p1,
-                boost::asio::buffer(size_line), boost::asio::use_awaitable);
-            for(int j = 0; j < k; j++){
-                auto [m0, m1] = make_random_mul_once();
-
-                // serialize each side
-                std::string msg0 = serialize_triple_line(m0);
-                std::string msg1 = serialize_triple_line(m1);
-
-                // send to each client
-                co_await send_text(socket_p0, msg0);
-                co_await send_text(socket_p1, msg1);
-            }
-            if ((i + 1) % 100 == 0 || i + 1 == q) {
-                std::cout << "  sent " << (i + 1) << "/" << q << " multiplication triples\n";
-            }
-        }
-
-        // optional final ack for both clients
-        static constexpr char ok[] = "OK\n";
-        co_await boost::asio::async_write(socket_p0, boost::asio::buffer(ok, sizeof(ok) - 1), boost::asio::use_awaitable);
-        co_await boost::asio::async_write(socket_p1, boost::asio::buffer(ok, sizeof(ok) - 1), boost::asio::use_awaitable);
-
-        std::cout << "P2: done streaming multiplication triples.\n";
-    } catch (const std::exception& e) {
-        std::cerr << "serve_mult_triple error: " << e.what() << "\n";
-    }
-    co_return;
-}*/
-
 // Run multiple coroutines in parallel
 template <typename... Fs>
 void run_in_parallel(boost::asio::io_context& io, Fs&&... funcs) {
@@ -283,16 +234,6 @@ int main() {
             // because serve_pairs() guarantees the i-th pair is split
             // consistently between P0 and P1.
         );
-
-        // run_in_parallel(io_context,
-        //     [&]() -> boost::asio::awaitable<void> {
-        //         // NEW: stream matched pairs to each client instead of dumping to files
-        //         co_await serve_mult_triple(socket_p0, socket_p1, q, k);
-        //     }
-        //     // NOTE: we no longer co-spawn two handle_client() here,
-        //     // because serve_pairs() guarantees the i-th pair is split
-        //     // consistently between P0 and P1.
-        // );
 
         io_context.run();
 

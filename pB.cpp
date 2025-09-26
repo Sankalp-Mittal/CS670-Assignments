@@ -23,28 +23,28 @@ using boost::asio::ip::tcp;
 #endif
 
 // --- endian helpers (wire = big-endian) ---
-static inline uint64_t h2be64(uint64_t x){
+static inline long long h2be64(long long x){
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
     return __builtin_bswap64(x);
 #else
     return x;
 #endif
 }
-static inline uint64_t be2h64(uint64_t x){
+static inline long long be2h64(long long x){
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
     return __builtin_bswap64(x);
 #else
     return x;
 #endif
 }
-static inline uint32_t h2be32(uint32_t x){
+static inline int h2be32(int x){
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
     return __builtin_bswap32(x);
 #else
     return x;
 #endif
 }
-static inline uint32_t be2h32(uint32_t x){
+static inline int be2h32(int x){
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
     return __builtin_bswap32(x);
 #else
@@ -53,18 +53,18 @@ static inline uint32_t be2h32(uint32_t x){
 }
 
 // ----------------------- Helper coroutines -----------------------
-awaitable<void> send_coroutine(tcp::socket& sock, uint32_t value) {
+awaitable<void> send_coroutine(tcp::socket& sock, int value) {
     co_await boost::asio::async_write(sock, boost::asio::buffer(&value, sizeof(value)), use_awaitable);
 }
 
-awaitable<void> recv_coroutine(tcp::socket& sock, uint32_t& out) {
+awaitable<void> recv_coroutine(tcp::socket& sock, int& out) {
     co_await boost::asio::async_read(sock, boost::asio::buffer(&out, sizeof(out)), use_awaitable);
 }
 
 // Blinded exchange between peers
-awaitable<void> exchange_blinded(tcp::socket socket, uint32_t value_to_send) {
-    uint32_t blinded = blind_value(value_to_send);
-    uint32_t received;
+awaitable<void> exchange_blinded(tcp::socket socket, int value_to_send) {
+    int blinded = blind_value(value_to_send);
+    int received;
 
     co_await send_coroutine(socket, blinded);
     co_await recv_coroutine(socket, received);
@@ -102,8 +102,8 @@ awaitable<tcp::socket> setup_server_connection(boost::asio::io_context& io_conte
 }
 
 // Receive random value from P2
-awaitable<uint32_t> recv_from_P2(tcp::socket& sock) {
-    uint32_t received;
+awaitable<int> recv_from_P2(tcp::socket& sock) {
+    int received;
     co_await recv_coroutine(sock, received);
     co_return received;
 }
@@ -240,43 +240,11 @@ awaitable<void> recv_all_shares_from_P2(tcp::socket& sock,
         throw std::runtime_error("triples terminator missing (expected TOK), got: " + tok);
     }
 
+    std::cout<<"Total multiplication triples received from P2: " << mul_store.size() << " sets of " 
+             << (mul_store.empty() ? 0 : mul_store[0].size()) << " each\n";
+
     co_return;
 }
-
-
-// Fix this function to receive multiplication shares from P2
-/*awaitable<void> recv_all_mul_shares_from_P2(tcp::socket& sock, std::vector<std::vector<DuAtAllahMultClient>>& store) {
-    boost::asio::streambuf buf;
-    int idx = 0;
-    for (;;) {
-        std::string line1;
-        // skip empty lines
-        do { co_await read_line(sock, buf, line1); } while (line1.empty());
-
-        if (line1 == "OK") break;
-
-        std::vector<DuAtAllahMultClient> vmuls;
-        int k = 0;
-        std::istringstream issk(line1);
-        issk >> k;
-        vmuls.resize(k);
-
-        for(int i=0; i<k; i++){
-            std::string line2; co_await read_line(sock, buf, line2);
-            std::istringstream iss(line2);
-            iss >> vmuls[i].x >> vmuls[i].y >> vmuls[i].z;
-        }
-
-        // separator (can be blank, read and drop)
-        std::string sep; co_await read_line(sock, buf, sep);
-
-        store.emplace_back(std::move(vmuls));
-        idx++;
-        // print_share_debug(store.back(), store.size());
-    }
-    std::cout << "Total shares received from P2: " << store.size() << std::endl;
-    co_return;
-}*/
 
 // ----------------------- Shares Read Write -----------------------
 static random_vector
@@ -367,17 +335,17 @@ update_row_in_matrix_file(const std::string& path, int row_index,
 
 // --- header for exchanging two vectors ---
 struct VecPairHeader {
-    uint32_t magic;     // 'DXCH' = 0x44584348
-    uint32_t version;   // 1
-    uint32_t query_idx; // optional sanity
-    uint32_t len_x;
-    uint32_t len_y;
+    int magic;     // 'DXCH' = 0x44584348
+    int version;   // 1
+    int query_idx; // optional sanity
+    int len_x;
+    int len_y;
 };
 
 // async send two int64 vectors (big-endian on wire)
 static awaitable<void> send_two_vecs_async(
     tcp::socket& sock,
-    uint32_t query_idx,
+    int query_idx,
     const random_vector &vx,
     const random_vector &vy)
 {
@@ -392,14 +360,14 @@ static awaitable<void> send_two_vecs_async(
     co_await boost::asio::async_write(sock, boost::asio::buffer(&h, sizeof(h)), use_awaitable);
 
     if (!vx.empty()) {
-        std::vector<uint64_t> tmp(vx.data.size());
-        for (size_t i = 0; i < vx.data.size(); ++i) tmp[i] = h2be64(static_cast<uint64_t>(vx[i]));
-        co_await boost::asio::async_write(sock, boost::asio::buffer(tmp.data(), tmp.size()*sizeof(uint64_t)), use_awaitable);
+        std::vector<long long> tmp(vx.data.size());
+        for (size_t i = 0; i < vx.data.size(); ++i) tmp[i] = h2be64(static_cast<long long>(vx[i]));
+        co_await boost::asio::async_write(sock, boost::asio::buffer(tmp.data(), tmp.size()*sizeof(long long)), use_awaitable);
     }
     if (!vy.empty()) {
-        std::vector<uint64_t> tmp(vy.data.size());
-        for (size_t i = 0; i < vy.data.size(); ++i) tmp[i] = h2be64(static_cast<uint64_t>(vy[i]));
-        co_await boost::asio::async_write(sock, boost::asio::buffer(tmp.data(), tmp.size()*sizeof(uint64_t)), use_awaitable);
+        std::vector<long long> tmp(vy.data.size());
+        for (size_t i = 0; i < vy.data.size(); ++i) tmp[i] = h2be64(static_cast<long long>(vy[i]));
+        co_await boost::asio::async_write(sock, boost::asio::buffer(tmp.data(), tmp.size()*sizeof(long long)), use_awaitable);
     }
     co_return;
 }
@@ -407,7 +375,7 @@ static awaitable<void> send_two_vecs_async(
 // async recv two int64 vectors (big-endian on wire)
 static awaitable<void> recv_two_vecs_async(
     tcp::socket& sock,
-    uint32_t& query_idx_out,
+    int& query_idx_out,
     random_vector &vx_out,
     random_vector &vy_out)
 {
@@ -426,34 +394,31 @@ static awaitable<void> recv_two_vecs_async(
     vy_out.data.resize(ly);
 
     if (lx) {
-        std::vector<uint64_t> tmp(lx);
-        co_await boost::asio::async_read(sock, boost::asio::buffer(tmp.data(), tmp.size()*sizeof(uint64_t)), use_awaitable);
-        for (size_t i=0;i<tmp.size();++i) vx_out[i] = static_cast<long long>(be2h64(tmp[i]));
+        std::vector<long long> tmp(lx);
+        co_await boost::asio::async_read(sock, boost::asio::buffer(tmp.data(), tmp.size()*sizeof(long long)), use_awaitable);
+        for (size_t i=0;i<tmp.size();++i) vx_out.data[i] = static_cast<long long>(be2h64(tmp[i]));
     }
     if (ly) {
-        std::vector<uint64_t> tmp(ly);
-        co_await boost::asio::async_read(sock, boost::asio::buffer(tmp.data(), tmp.size()*sizeof(uint64_t)), use_awaitable);
-        for (size_t i=0;i<tmp.size();++i) vy_out[i] = static_cast<long long>(be2h64(tmp[i]));
+        std::vector<long long> tmp(ly);
+        co_await boost::asio::async_read(sock, boost::asio::buffer(tmp.data(), tmp.size()*sizeof(long long)), use_awaitable);
+        for (size_t i=0;i<tmp.size();++i) vy_out.data[i] = static_cast<long long>(be2h64(tmp[i]));
     }
     co_return;
 }
 
 // -------------------- Header of Beaver Triples Exchange --------------------
-static inline uint64_t add64(uint64_t a, uint64_t b) { return a + b; }
-static inline uint64_t sub64(uint64_t a, uint64_t b) { return a - b; }
-static inline uint64_t mul64(uint64_t a, uint64_t b) { return a * b; }
 
 // async scalar send/recv of two uint64 values (big-endian on wire)
 static inline boost::asio::awaitable<void>
 send_two_u64(boost::asio::ip::tcp::socket& sock, long long u0, long long u1) {
-    uint64_t be[2] = { h2be64(u0), h2be64(u1) };
+    long long be[2] = { h2be64(u0), h2be64(u1) };
     co_await boost::asio::async_write(sock, boost::asio::buffer(be, sizeof(be)),
                                       boost::asio::use_awaitable);
     co_return;
 }
 static inline boost::asio::awaitable<void>
 recv_two_u64(boost::asio::ip::tcp::socket& sock, long long& u0, long long& u1) {
-    uint64_t be[2];
+    long long be[2];
     co_await boost::asio::async_read(sock, boost::asio::buffer(be, sizeof(be)),
                                      boost::asio::use_awaitable);
     u0 = be2h64(be[0]);
@@ -464,29 +429,29 @@ recv_two_u64(boost::asio::ip::tcp::socket& sock, long long& u0, long long& u1) {
 // ----------------------- Barriers to keep both clients in lockstep -----------------------
 awaitable<void> barrier_prep(tcp::socket& peer) {
 #ifdef ROLE_p0
-    uint32_t code = 1; // PREP
+    int code = 1; // PREP
     co_await send_coroutine(peer, code);
-    uint32_t ack; co_await recv_coroutine(peer, ack);
+    int ack; co_await recv_coroutine(peer, ack);
 #else
-    uint32_t code; co_await recv_coroutine(peer, code);
+    int code; co_await recv_coroutine(peer, code);
     co_await send_coroutine(peer, code);
 #endif
     co_return;
 }
 
-awaitable<void> barrier_query(tcp::socket& peer, uint32_t idx) {
+awaitable<void> barrier_query(tcp::socket& peer, int idx) {
 #ifdef ROLE_p0
-    uint32_t code = 2; // QUERY
+    int code = 2; // QUERY
     co_await send_coroutine(peer, code);
     co_await send_coroutine(peer, idx);
-    uint32_t code2, idx2;
+    int code2, idx2;
     co_await recv_coroutine(peer, code2);
     co_await recv_coroutine(peer, idx2);
     if (code2 != 2 || idx2 != idx) {
         std::cerr << "Barrier mismatch (sent idx=" << idx << ", got idx=" << idx2 << ")\n";
     }
 #else
-    uint32_t code_in, idx_in;
+    int code_in, idx_in;
     co_await recv_coroutine(peer, code_in);
     co_await recv_coroutine(peer, idx_in);
     co_await send_coroutine(peer, code_in);
@@ -550,7 +515,7 @@ static boost::asio::awaitable<long long> secure_mpc_multiplication(long long a, 
     co_await send_two_u64(peer_sock, myx, myy);
 #endif
 
-    long long c = a*(b + peery) - b*(peerx) + dmulc.z;
+    long long c = a*(b + peery) - dmulc.y*(peerx) + dmulc.z;
     co_return c;
 }
 
@@ -575,18 +540,20 @@ static boost::asio::awaitable<long long> mpc_dot_product_async(const std::vector
 
     for(int i=1 ; i<q.size() ; i++) item_share[i-1] = q[i];
 
+    // std::cout<<"Got item shares into a vector of size "<<item_share.size()<<"\n";
+
     // 2) Prepare a vector derived from s to exchange with the peer.
     //    (Pick X or Y or any aux you require; here we send s.X as an example.)
-    random_vector my_x_sums, my_y_sums;
-    my_x_sums.data.reserve(s.X.size());
-    my_y_sums.data.reserve(s.X.size());
+    random_vector my_x_sums(s.X.size()), my_y_sums(s.Y.size());
+    // my_x_sums.data.reserve(s.X.size());
+    // my_y_sums.data.reserve(s.Y.size());
 
-    my_x_sums = s.X + user_share;
-    my_y_sums = s.Y + item_share;
-    // for (int i=0; i<s.X.size(); i++) my_x_sums = (s.X) + (user_share);
-    // for (int i=0; i<s.Y.size(); i++) my_y_sums = (s.Y) + (item_share);
+    // my_x_sums = s.X + user_share;
+    // my_y_sums = s.Y + item_share;
+    for (int j=0; j<s.X.size(); j++) my_x_sums.data[j] = (s.X[j]) + (user_share[j]);
+    for (int j=0; j<s.Y.size(); j++) my_y_sums.data[j] = (s.Y[j]) + (item_share[j]);
 
-    uint32_t peer_qidx = qidx, qidx_for_sanity = qidx;
+    int peer_qidx = qidx, qidx_for_sanity = qidx;
     random_vector peer_x_sums, peer_y_sums;
 
     #ifdef ROLE_p0
@@ -596,22 +563,36 @@ static boost::asio::awaitable<long long> mpc_dot_product_async(const std::vector
     co_await recv_two_vecs_async(peer_sock, peer_qidx, peer_x_sums, peer_y_sums);
     co_await send_two_vecs_async(peer_sock, qidx_for_sanity, my_x_sums, my_y_sums);
     #endif
+    
+    // for(auto el: peer_x_sums.data) std::cout<<el<<" "; std::cout<<"\n";
 
     if (peer_qidx != qidx_for_sanity) throw std::runtime_error("peer query index mismatch");
     if (peer_x_sums.size() != my_x_sums.size() || peer_y_sums.size() != my_y_sums.size())
         throw std::runtime_error("peer vector length mismatch");
 
-    random_vector addition_temp;
+    std::cout<<"Exchanged vectors with peer, proceeding to local computation...\n";
+
+    random_vector addition_temp(item_share.size());
+    // std::cout<<"Starting local delta computation"<<std::endl;
     addition_temp = item_share + peer_y_sums;
-    long long delta = user_share.dot_product(addition_temp) - item_share.dot_product(peer_x_sums) + s.z;
+    // std::cout<<"DOne temp addition"<<std::endl;
+    long long delta = user_share.dot_product(addition_temp) - (s.Y).dot_product(peer_x_sums) + s.z;
     long long factor = (1-delta);
+    #ifdef ROLE_p0
+    factor -= 1;
+    #endif
+    // std::cout<<"Computed local delta = "<<delta<<" and factor = "<<factor<<std::endl;
     // item_share *= factor;
     // ---------------------------
 
-    for(int i=0; i< item_share.size(); i++){
-        item_share[i] = co_await secure_mpc_multiplication(item_share[i], factor, vmuls[i], peer_sock);
+    // std::cout<<"Scaling item share vector by factor "<<factor<<std::endl;
+    for(int j=0; j< item_share.size(); j++){
+        // std::cout<<"Scaling item share["<<j<<"] = "<<item_share[j]<<" by factor "<<factor<<std::endl;
+        item_share[j] = co_await secure_mpc_multiplication(item_share[j], factor, vmuls[j], peer_sock);
     }
     // ---------------------------
+
+    std::cout<<"Completed MPC scaling of item vector by factor "<<factor<<"\n";
     user_share = user_share + item_share;
     
     append_result_share_to_file(qidx, user_share, user_idx);
@@ -664,7 +645,7 @@ awaitable<void> run(boost::asio::io_context& io_context) {
     for (std::size_t i = 0; i < queries.size(); ++i) {
         // per-query barrier to ensure both parties use the same query index
         std::cout<<"processing query #"<<i<<"\n";
-        co_await barrier_query(peer_sock, static_cast<uint32_t>(i));
+        co_await barrier_query(peer_sock, static_cast<int>(i));
 
         // compute the MPC dot product share
         co_await mpc_dot_product_async(queries[i], i, received_shares[i], received_mul_shares[i], peer_sock);

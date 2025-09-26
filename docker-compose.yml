@@ -7,7 +7,7 @@ services:
     container_name: gen
     # run generator directly; pass your args (positionals + optional flags)
     entrypoint: ["/app/gen_queries"]
-    command: ["10", "10", "5", "3", "--seed=42", "--debug"]
+    command: ["10", "10", "5", "1", "--seed=42", "--debug"]
     volumes:
       - ./mpc_data:/data
     networks: [mpc_net]

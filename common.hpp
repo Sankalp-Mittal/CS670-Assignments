@@ -30,6 +30,24 @@ inline uint32_t random_uint32() {
     return dis(gen);
 }
 
+inline int32_t random_pm100() {
+    static thread_local std::mt19937 gen(std::random_device{}());
+    static std::uniform_int_distribution<int32_t> dis(-100, 100);
+    return dis(gen); // returns an int in [-100, 100]
+}
+
+inline uint32_t random_uint32_pm100(uint32_t center) {
+    static thread_local std::mt19937 gen(std::random_device{}());
+    static std::uniform_int_distribution<int> delta(-100, 100);
+    int d = delta(gen);
+
+    // Do math in wider type; clamp to [0, UINT32_MAX]
+    int64_t v = static_cast<int64_t>(center) + d;
+    if (v < 0) v = 0;
+    if (v > std::numeric_limits<uint32_t>::max()) v = std::numeric_limits<uint32_t>::max();
+    return static_cast<uint32_t>(v);
+}
+
 // Blind by XOR mask
 inline uint32_t blind_value(uint32_t v) {
     return v ^ 0xDEADBEEF;
@@ -66,7 +84,7 @@ struct random_vector{
 
     long long dot_product(random_vector& x){
         long long val = 0;
-        long long k = this->data.size();
+        long long k = data.size();
         for(int i=0;i<k;i++){
             val += data[i]*(x.data[i]);
         }
@@ -107,7 +125,7 @@ struct DuAtAllahClient{
     long long z;
 
     DuAtAllahClient(int k) : X(k), Y(k){
-        z = (long long)random_uint32();
+        z = (long long)random_pm100();
     }
 };
 
@@ -116,7 +134,7 @@ struct DuAtAllahServer{
     long long alpha;
 
     DuAtAllahServer(int k) : X0(k), X1(k), Y0(k), Y1(k) {
-        alpha = random_uint32();
+        alpha = random_pm100();
     }
 
     std::pair<DuAtAllahClient,DuAtAllahClient> generate_client_shares(){
@@ -143,11 +161,11 @@ struct DuAtAllahMultServer{
     long long alpha;
 
     DuAtAllahMultServer() {
-        x0 = random_uint32();
-        x1 = random_uint32();
-        y0 = random_uint32();
-        y1 = random_uint32();
-        alpha = random_uint32();
+        x0 = random_pm100();
+        x1 = random_pm100();
+        y0 = random_pm100();
+        y1 = random_pm100();
+        alpha = random_pm100();
     }
 };
 
