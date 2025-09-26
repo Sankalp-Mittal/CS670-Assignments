@@ -12,6 +12,7 @@ struct Args {
     bool have_seed = false;
     uint64_t seed = 0;
     bool packets = false;
+    bool debug = false;          // NEW
 };
 
 static bool starts_with(const std::string& s, const std::string& p) {
@@ -21,7 +22,7 @@ static bool starts_with(const std::string& s, const std::string& p) {
 static Args parse_args(int argc, char* argv[]) {
     if (argc < 5) {
         throw std::runtime_error(
-            "Usage: ./gen_queries <m> <n> <k> <q> [--seed=SEED] [--packets]");
+            "Usage: ./gen_queries <m> <n> <k> <q> [--seed=SEED] [--packets] [--debug]");
     }
     Args a{};
     a.m = std::stoi(argv[1]);
@@ -38,6 +39,8 @@ static Args parse_args(int argc, char* argv[]) {
             a.seed = std::stoull(arg.substr(8));
         } else if (arg == "--packets") {
             a.packets = true;
+        } else if (arg == "--debug") {       // NEW
+            a.debug = true;
         } else {
             std::ostringstream oss;
             oss << "Unknown option: " << arg;
@@ -125,7 +128,7 @@ int main(int argc, char* argv[]) {
         write_matrix("p0_V.txt", n, k, V0);
         write_matrix("p1_V.txt", n, k, V1);
 
-        // Generate queries (i, j) and store as pairs
+        // Generate queries (i, j)
         std::vector<std::pair<int,int>> queries(q);
         for (int t = 0; t < q; ++t) {
             int ui = rng.index(m - 1);
@@ -137,7 +140,7 @@ int main(int argc, char* argv[]) {
         {
             std::ofstream fq("queries.txt");
             if (!fq) throw std::runtime_error("Failed to open queries.txt");
-            fq << q << "\n";
+            fq << q << " " << k << "\n";
             for (size_t idx = 0; idx < queries.size(); ++idx) {
                 const int i = queries[idx].first;
                 const int j = queries[idx].second;
@@ -167,8 +170,9 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        // Optional: debugging—true U, V and queries (keep private!)
-        {
+        // DEBUG OUTPUTS — only when --debug
+        if (args.debug) {
+            // dump true U, V, and queries for reconstruction checks
             std::ofstream fd("plain_UV.txt");
             if (fd) {
                 fd << "U (m=" << m << ", k=" << k << ")\n";
@@ -192,14 +196,16 @@ int main(int argc, char* argv[]) {
                     fd << queries[idx].first << " " << queries[idx].second << "\n";
                 }
             }
+
+            // console debug summary
+            std::cout << "Wrote:\n"
+                      << "  p0_U.txt, p1_U.txt (matrix shares of U)\n"
+                      << "  p0_V.txt, p1_V.txt (matrix shares of V)\n"
+                      << "  queries.txt (q lines of i j)\n";
+            if (args.packets) std::cout << "  p0_queries.txt, p1_queries.txt (per-query packets)\n";
+            std::cout << "(Debug) plain_UV.txt with true values (do NOT give to parties)\n";
         }
 
-        std::cout << "Wrote:\n"
-                  << "  p0_U.txt, p1_U.txt (matrix shares of U)\n"
-                  << "  p0_V.txt, p1_V.txt (matrix shares of V)\n"
-                  << "  queries.txt (q lines of i j)\n";
-        if (args.packets) std::cout << "  p0_queries.txt, p1_queries.txt (per-query packets)\n";
-        std::cout << "(Debug) plain_UV.txt with true values (do NOT give to parties)\n";
         return 0;
     } catch (const std::exception& ex) {
         std::cerr << "Error: " << ex.what() << "\n";
