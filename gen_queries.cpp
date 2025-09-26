@@ -6,7 +6,6 @@
 #include <cstdint>
 #include <stdexcept>
 #include <sstream>
-
 struct Args {
     int m, n, k, q;
     bool have_seed = false;
@@ -111,6 +110,7 @@ int main(int argc, char* argv[]) {
         // Write matrix shares
         const auto write_matrix = [](const std::string& path, int rows, int cols,
                                      const std::vector<std::vector<int64_t>>& M) {
+
             std::ofstream f(path);
             if (!f) throw std::runtime_error("Failed to open " + path);
             f << rows << " " << cols << "\n";
@@ -123,10 +123,10 @@ int main(int argc, char* argv[]) {
             }
         };
 
-        write_matrix("p0_U.txt", m, k, U0);
-        write_matrix("p1_U.txt", m, k, U1);
-        write_matrix("p0_V.txt", n, k, V0);
-        write_matrix("p1_V.txt", n, k, V1);
+        write_matrix("p0_shares/p0_U.txt", m, k, U0);
+        write_matrix("p1_shares/p1_U.txt", m, k, U1);
+        write_matrix("p0_shares/p0_V.txt", n, k, V0);
+        write_matrix("p1_shares/p1_V.txt", n, k, V1);
 
         // Generate queries (i, j)
         std::vector<std::pair<int,int>> queries(q);
@@ -199,8 +199,8 @@ int main(int argc, char* argv[]) {
 
             // console debug summary
             std::cout << "Wrote:\n"
-                      << "  p0_U.txt, p1_U.txt (matrix shares of U)\n"
-                      << "  p0_V.txt, p1_V.txt (matrix shares of V)\n"
+                      << "  p0/p0_U.txt, p1/p1_U.txt (matrix shares of U)\n"
+                      << "  p0/p0_V.txt, p1/p1_V.txt (matrix shares of V)\n"
                       << "  queries.txt (q lines of i j)\n";
             if (args.packets) std::cout << "  p0_queries.txt, p1_queries.txt (per-query packets)\n";
             std::cout << "(Debug) plain_UV.txt with true values (do NOT give to parties)\n";

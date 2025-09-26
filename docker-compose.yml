@@ -1,32 +1,76 @@
+version: "3.9"
+
 services:
+  gen:
+    build: .
+    image: mpc:latest
+    container_name: gen
+    # run generator directly; pass your args (positionals + optional flags)
+    entrypoint: ["/app/gen_queries"]
+    command: ["10", "10", "5", "3", "--seed=42", "--debug"]
+    volumes:
+      - mpc_data:/data                   # <-- write /data/queries.txt here
+      # If gen reads these files, mount them read-only:
+      - ./p0_shares/p0_U.txt:/data/p0_shares/p0_U.txt:rw
+      - ./p0_shares/p0_V.txt:/data/p0_shares/p0_V.txt:rw
+      - ./p1_shares/p1_U.txt:/data/p1_shares/p1_U.txt:rw
+      - ./p1_shares/p1_V.txt:/data/p1_shares/p1_V.txt:rw
+    networks: [mpc_net]
+    restart: "no"
+
   p2:
     build: .
+    image: mpc:latest
     container_name: p2
-    environment:
-      - ROLE=p2
-    networks:
-      - mpc_net
+    environment: [ROLE=p2]
+    depends_on:
+      gen:
+        condition: service_completed_successfully   # wait until gen exits 0
+    # healthcheck:
+    #   # consider p2 healthy when port 9002 is accepting connections
+    #   test: ["CMD", "bash", "-lc", "exec 3<>/dev/tcp/127.0.0.1/9002"]
+    #   interval: 2s
+    #   timeout: 1s
+    #   retries: 30
+    #   start_period: 2s
+    # optional: expose port for host debugging
+    # ports: ["9002:9002"]
+    volumes:
+      - mpc_data:/data
+    networks: [mpc_net]
+    restart: unless-stopped
 
   p0:
     build: .
+    image: mpc:latest
     container_name: p0
-    environment:
-      - ROLE=p0
+    environment: [ROLE=p0]
     depends_on:
       - p2
-      - p1
-    networks:
-      - mpc_net
+      - p1              
+    volumes:
+      - mpc_data:/data                              # <-- see /data/queries.txt from gen
+      - ./p0_shares/p0_U.txt:/data/p0_shares/p0_U.txt:rw          # correct path & perms
+      - ./p0_shares/p0_V.txt:/data/p0_shares/p0_V.txt:ro
+    networks: [mpc_net]
+    restart: "no"
 
   p1:
     build: .
+    image: mpc:latest
     container_name: p1
-    environment:
-      - ROLE=p1
+    environment: [ROLE=p1]
     depends_on:
       - p2
-    networks:
-      - mpc_net
+    volumes:
+      - mpc_data:/data
+      - ./p1_shares/p1_U.txt:/data/p1_shares/p1_U.txt:rw
+      - ./p1_shares/p1_V.txt:/data/p1_shares/p1_V.txt:ro
+    networks: [mpc_net]
+    restart: "no"
+
+volumes:
+  mpc_data:
 
 networks:
   mpc_net:
