@@ -1,3 +1,5 @@
+## To be completed
+
 # CS670 – A1 (MPC with Du–Atallah) — README
 
 > **Heads-up (correctness disclaimer)**
