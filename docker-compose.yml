@@ -9,12 +9,7 @@ services:
     entrypoint: ["/app/gen_queries"]
     command: ["10", "10", "5", "3", "--seed=42", "--debug"]
     volumes:
-      - mpc_data:/data                   # <-- write /data/queries.txt here
-      # If gen reads these files, mount them read-only:
-      - ./p0_shares/p0_U.txt:/data/p0_shares/p0_U.txt:rw
-      - ./p0_shares/p0_V.txt:/data/p0_shares/p0_V.txt:rw
-      - ./p1_shares/p1_U.txt:/data/p1_shares/p1_U.txt:rw
-      - ./p1_shares/p1_V.txt:/data/p1_shares/p1_V.txt:rw
+      - ./mpc_data:/data
     networks: [mpc_net]
     restart: "no"
 
@@ -26,17 +21,8 @@ services:
     depends_on:
       gen:
         condition: service_completed_successfully   # wait until gen exits 0
-    # healthcheck:
-    #   # consider p2 healthy when port 9002 is accepting connections
-    #   test: ["CMD", "bash", "-lc", "exec 3<>/dev/tcp/127.0.0.1/9002"]
-    #   interval: 2s
-    #   timeout: 1s
-    #   retries: 30
-    #   start_period: 2s
-    # optional: expose port for host debugging
-    # ports: ["9002:9002"]
     volumes:
-      - mpc_data:/data
+      - ./mpc_data:/data
     networks: [mpc_net]
     restart: unless-stopped
 
@@ -49,9 +35,7 @@ services:
       - p2
       - p1              
     volumes:
-      - mpc_data:/data                              # <-- see /data/queries.txt from gen
-      - ./p0_shares/p0_U.txt:/data/p0_shares/p0_U.txt:rw          # correct path & perms
-      - ./p0_shares/p0_V.txt:/data/p0_shares/p0_V.txt:ro
+      - ./mpc_data:/data
     networks: [mpc_net]
     restart: "no"
 
@@ -63,14 +47,9 @@ services:
     depends_on:
       - p2
     volumes:
-      - mpc_data:/data
-      - ./p1_shares/p1_U.txt:/data/p1_shares/p1_U.txt:rw
-      - ./p1_shares/p1_V.txt:/data/p1_shares/p1_V.txt:ro
+      - ./mpc_data:/data
     networks: [mpc_net]
     restart: "no"
-
-volumes:
-  mpc_data:
 
 networks:
   mpc_net:

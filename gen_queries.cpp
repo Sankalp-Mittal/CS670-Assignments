@@ -123,10 +123,10 @@ int main(int argc, char* argv[]) {
             }
         };
 
-        write_matrix("p0_shares/p0_U.txt", m, k, U0);
-        write_matrix("p1_shares/p1_U.txt", m, k, U1);
-        write_matrix("p0_shares/p0_V.txt", n, k, V0);
-        write_matrix("p1_shares/p1_V.txt", n, k, V1);
+        write_matrix("/data/p0_shares/p0_U.txt", m, k, U0);
+        write_matrix("/data/p1_shares/p1_U.txt", m, k, U1);
+        write_matrix("/data/p0_shares/p0_V.txt", n, k, V0);
+        write_matrix("/data/p1_shares/p1_V.txt", n, k, V1);
 
         // Generate queries (i, j)
         std::vector<std::pair<int,int>> queries(q);
@@ -138,7 +138,7 @@ int main(int argc, char* argv[]) {
 
         // Write queries file: q then q lines "i j"
         {
-            std::ofstream fq("queries.txt");
+            std::ofstream fq("/data/queries.txt");
             if (!fq) throw std::runtime_error("Failed to open queries.txt");
             fq << q << " " << k << "\n";
             for (size_t idx = 0; idx < queries.size(); ++idx) {
@@ -173,7 +173,7 @@ int main(int argc, char* argv[]) {
         // DEBUG OUTPUTS — only when --debug
         if (args.debug) {
             // dump true U, V, and queries for reconstruction checks
-            std::ofstream fd("plain_UV.txt");
+            std::ofstream fd("/data/plain_UV.txt");
             if (fd) {
                 fd << "U (m=" << m << ", k=" << k << ")\n";
                 for (int i = 0; i < m; ++i) {
@@ -199,9 +199,9 @@ int main(int argc, char* argv[]) {
 
             // console debug summary
             std::cout << "Wrote:\n"
-                      << "  p0/p0_U.txt, p1/p1_U.txt (matrix shares of U)\n"
-                      << "  p0/p0_V.txt, p1/p1_V.txt (matrix shares of V)\n"
-                      << "  queries.txt (q lines of i j)\n";
+                      << "  /data/p0_shares/p0_U.txt, /data/p1_shares/p1_U.txt (matrix shares of U)\n"
+                      << "  /data/p0_shares/p0_V.txt, /data/p1_shares/p1_V.txt (matrix shares of V)\n"
+                      << "  /data/queries.txt (q lines of i j)\n";
             if (args.packets) std::cout << "  p0_queries.txt, p1_queries.txt (per-query packets)\n";
             std::cout << "(Debug) plain_UV.txt with true values (do NOT give to parties)\n";
         }

@@ -170,7 +170,7 @@ int main() {
         tcp::socket socket_p1(io_context);
         acceptor.accept(socket_p1);
 
-        std::ifstream fin("queries.txt");
+        std::ifstream fin("/data/queries.txt");
         int q,k;
         fin >> q >> k;
         fin.close();

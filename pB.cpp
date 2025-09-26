@@ -122,7 +122,33 @@ awaitable<tcp::socket> setup_peer_connection(boost::asio::io_context& io_context
     co_return sock;
 }
 
-// ----------------------- NEW: Share reception + storage -----------------------
+// ----------------------- File persistence -----------------------
+#ifdef ROLE_p0
+static constexpr const char* SHARE_LOG_PATH  = "/data/client0.shares";
+static constexpr const char* RESULT_LOG_PATH = "/data/client0.results";
+#else
+static constexpr const char* SHARE_LOG_PATH  = "/data/client1.shares";
+static constexpr const char* RESULT_LOG_PATH = "/data/client1.results";
+#endif
+
+static inline void append_my_share_to_file(const DuAtAllahClient& s, std::size_t idx) {
+    std::ofstream f(SHARE_LOG_PATH, std::ios::app);
+    if (!f) { std::cerr << "Failed to open " << SHARE_LOG_PATH << " for append\n"; return; }
+    f << "# query " << idx << "\n";
+    for (size_t i = 0; i < s.X.size(); ++i) { if (i) f << ' '; f << s.X[i]; } f << '\n';
+    for (size_t i = 0; i < s.Y.size(); ++i) { if (i) f << ' '; f << s.Y[i]; } f << '\n';
+    f << s.z << "\n\n";
+}
+
+static inline void append_result_share_to_file(std::size_t idx, random_vector& share_vector, int user_idx) {
+    std::ofstream f(RESULT_LOG_PATH, std::ios::app);
+    if (!f) { std::cerr << "Failed to open " << RESULT_LOG_PATH << " for append\n"; return; }
+    f << "query " << idx << " by user #" << user_idx << " | updated share: ";
+    for (size_t i = 0; i < share_vector.size(); ++i) { if (i) f << ' '; f << share_vector[i]; }
+    f << "\n";
+}
+
+// ----------------------- Share reception + storage -----------------------
 
 static inline void rstrip_cr(std::string& s) {
     if (!s.empty() && s.back() == '\r') s.pop_back();
@@ -145,17 +171,18 @@ static inline random_vector parse_int_line(const std::string& line) {
     return rv;
 }
 
-static inline void print_share_debug(const DuAtAllahClient& s, std::size_t idx) {
+/*static inline void print_share_debug(const DuAtAllahClient& s, std::size_t idx) {
     std::cout << "Share #" << idx << ":\n";
     std::cout << "  X: ";
     for (std::size_t i = 0; i < s.X.size(); ++i) { if (i) std::cout << ' '; std::cout << s.X[i]; }
     std::cout << "\n  Y: ";
     for (std::size_t i = 0; i < s.Y.size(); ++i) { if (i) std::cout << ' '; std::cout << s.Y[i]; }
     std::cout << "\n  z: " << s.z << "\n";
-}
+}*/
 
 awaitable<void> recv_all_shares_from_P2(tcp::socket& sock, std::vector<DuAtAllahClient>& store) {
     boost::asio::streambuf buf;
+    int idx = 0;
     for (;;) {
         std::string line1;
         // skip empty lines
@@ -176,8 +203,10 @@ awaitable<void> recv_all_shares_from_P2(tcp::socket& sock, std::vector<DuAtAllah
         // separator (can be blank, read and drop)
         std::string sep; co_await read_line(sock, buf, sep);
 
+        append_my_share_to_file(s,idx++); //Store in a file for debugging
+
         store.emplace_back(std::move(s));
-        print_share_debug(store.back(), store.size());
+        // print_share_debug(store.back(), store.size());
     }
     std::cout << "Total shares received from P2: " << store.size() << std::endl;
     co_return;
@@ -343,32 +372,6 @@ static awaitable<void> recv_two_vecs_async(
     co_return;
 }
 
-// ----------------------- File persistence -----------------------
-#ifdef ROLE_p0
-static constexpr const char* SHARE_LOG_PATH  = "/data/client0.shares";
-static constexpr const char* RESULT_LOG_PATH = "/data/client0.results";
-#else
-static constexpr const char* SHARE_LOG_PATH  = "/data/client1.shares";
-static constexpr const char* RESULT_LOG_PATH = "/data/client1.results";
-#endif
-
-static inline void append_my_share_to_file(const DuAtAllahClient& s, std::size_t idx) {
-    std::ofstream f(SHARE_LOG_PATH, std::ios::app);
-    if (!f) { std::cerr << "Failed to open " << SHARE_LOG_PATH << " for append\n"; return; }
-    f << "# query " << idx << "\n";
-    for (size_t i = 0; i < s.X.size(); ++i) { if (i) f << ' '; f << s.X[i]; } f << '\n';
-    for (size_t i = 0; i < s.Y.size(); ++i) { if (i) f << ' '; f << s.Y[i]; } f << '\n';
-    f << s.z << "\n\n";
-}
-
-static inline void append_result_share_to_file(std::size_t idx, long long my_share, const std::vector<long long>& qvec) {
-    std::ofstream f(RESULT_LOG_PATH, std::ios::app);
-    if (!f) { std::cerr << "Failed to open " << RESULT_LOG_PATH << " for append\n"; return; }
-    f << "query " << idx << " result_share " << my_share << " | q=";
-    for (size_t i = 0; i < qvec.size(); ++i) { if (i) f << ' '; f << qvec[i]; }
-    f << "\n";
-}
-
 // ----------------------- Barriers to keep both clients in lockstep -----------------------
 awaitable<void> barrier_prep(tcp::socket& peer) {
 #ifdef ROLE_p0
@@ -413,15 +416,23 @@ static std::vector<std::vector<long long>> read_queries_file(const std::string& 
     }
     long long q = 0;
     if (!(fin >> q)) {
-        std::cerr << "queries.txt: first token must be q\n";
+        std::cerr << "/data/queries.txt: first token must be q\n";
         return queries;
     }
     queries.reserve(static_cast<size_t>(q));
+    long long k = 0;
+    if (!(fin >> k)) {
+        std::cerr << "/data/queries.txt: second token must be k\n";
+        return queries;
+    }
+
+    //Temp Solution make update to item oblivious
+    expected_k = 2;
     for (long long i = 0; i < q; ++i) {
         std::vector<long long> v(expected_k);
         for (int j = 0; j < expected_k; ++j) {
             if (!(fin >> v[j])) {
-                std::cerr << "queries.txt: not enough numbers on query " << i << " (expected " << expected_k << ")\n";
+                std::cerr << "/data/queries.txt: not enough numbers on query " << i << " (expected " << expected_k << ")\n";
                 v.resize(j);
                 break;
             }
@@ -432,7 +443,7 @@ static std::vector<std::vector<long long>> read_queries_file(const std::string& 
     return queries;
 }
 
-// ----------------------- NEW: MPC dot product stub (fill this) -----------------------
+// ----------------------- MPC dot product stub -----------------------
 static boost::asio::awaitable<long long> mpc_dot_product_async(const std::vector<long long>& q,
                                  DuAtAllahClient& s,
                                  tcp::socket& peer_sock /* use for your protocol */) {
@@ -440,6 +451,7 @@ static boost::asio::awaitable<long long> mpc_dot_product_async(const std::vector
     if (q.size() != 2) throw std::runtime_error("q must have two entries (n, m)");
     const int user_idx = static_cast<int>(q[0]);
     const int item_idx = static_cast<int>(q[1]);
+    std::cout<<"query is: "<<user_idx<<" ,"<<item_idx<<"\n";
 
     // 1) Load my shares for this (user,row) and (item,row) from files (based on ROLE)
     const std::string U_path = user_matrix_path();
@@ -474,19 +486,16 @@ static boost::asio::awaitable<long long> mpc_dot_product_async(const std::vector
     if (peer_x_sums.size() != my_x_sums.size() || peer_y_sums.size() != my_y_sums.size())
         throw std::runtime_error("peer vector length mismatch");
 
-    // 4) --- YOUR COMPUTATION HERE ---
     random_vector addition_temp;
     addition_temp = item_share + peer_y_sums;
     long long delta = user_share.dot_product(addition_temp) - item_share.dot_product(peer_x_sums) + s.z;
     long long factor = (1-delta);
-    user_share *= factor;
-
-    // 6) (Optional) Persist the updated row back to the matrix file so the change survives
-    //    Comment out if you only want in-memory updates.
+    item_share *= factor;
+    user_share = user_share + item_share;
+    
+    append_result_share_to_file(0, user_share, user_idx);
     update_row_in_matrix_file(U_path, user_idx, user_share.data);
 
-    // Return your scalar share result for this dot-product (fill this as needed).
-    // For now, placeholder 0 until you implement the MPC math.
     co_return 0LL;
 }
 
@@ -515,7 +524,9 @@ awaitable<void> run(boost::asio::io_context& io_context) {
 
     // Step 4: read queries (same file path inside both containers)
     const int k = received_shares.empty() ? 0 : static_cast<int>(received_shares.front().X.size());
-    auto queries = read_queries_file("queries.txt", k);
+    auto queries = read_queries_file("/data/queries.txt", k);
+
+    std::cout<<"Read "<<queries.size()<<" queries from the file\n";
     if (k == 0 || queries.empty()) {
         std::cerr << "No shares or no queries to process (k=" << k << ", queries=" << queries.size() << ")\n";
         co_return;
@@ -529,25 +540,20 @@ awaitable<void> run(boost::asio::io_context& io_context) {
     // Step 5: process each query in strict lockstep
     for (std::size_t i = 0; i < queries.size(); ++i) {
         // per-query barrier to ensure both parties use the same query index
+        std::cout<<"processing query #"<<i<<"\n";
         co_await barrier_query(peer_sock, static_cast<uint32_t>(i));
 
         // (optional) dump the share we are about to use
         // append_my_share_to_file(received_shares[i], i);
 
         // compute the MPC dot product share (you will implement the real protocol)
-        long long my_result_share = co_await mpc_dot_product_async(queries[i], received_shares[i], peer_sock);
+        co_await mpc_dot_product_async(queries[i], received_shares[i], peer_sock);
 
         // persist result share
         // append_result_share_to_file(i, my_result_share, queries[i]);
 
         // debug print
-        std::cout << "Processed query #" << i << ", my_result_share=" << my_result_share << "\n";
-    }
-
-    // (Optional) you can still do your blinded exchange demo if you want, using last z:
-    if (!received_shares.empty()) {
-        uint32_t val = static_cast<uint32_t>(received_shares.back().z);
-        co_await exchange_blinded(std::move(peer_sock), val);
+        std::cout << "Processed query #" << i << "\n";
     }
 
     co_return;
