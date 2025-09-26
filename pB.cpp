@@ -170,9 +170,13 @@ static inline random_vector parse_int_line(const std::string& line) {
     return rv;
 }
 
-awaitable<void> recv_all_shares_from_P2(tcp::socket& sock, std::vector<DuAtAllahClient>& store) {
+awaitable<void> recv_all_shares_from_P2(tcp::socket& sock, 
+                                        std::vector<DuAtAllahClient>& store, 
+                                        std::vector<std::vector<DuAtAllahMultClient>>& mul_store) {
     boost::asio::streambuf buf;
     int idx = 0;
+
+    // --------- 1) READ SHARE LINES UNTIL "OK" ----------
     for (;;) {
         std::string line1;
         // skip empty lines
@@ -193,14 +197,86 @@ awaitable<void> recv_all_shares_from_P2(tcp::socket& sock, std::vector<DuAtAllah
         // separator (can be blank, read and drop)
         std::string sep; co_await read_line(sock, buf, sep);
 
-        append_my_share_to_file(s,idx++); //Store in a file for debugging
-
+        append_my_share_to_file(s, idx++); // optional debug
         store.emplace_back(std::move(s));
+    }
+    std::cout << "Total shares received from P2: " << store.size() << std::endl;
+
+    // --------- 2) READ MULTIPLICATION TRIPLES BLOCK ----------
+    // Expect header: "TRPL q k"
+    std::string header;
+    co_await read_line(sock, buf, header);
+    {
+        std::istringstream hs(header);
+        std::string tag; int q = 0, k = 0;
+        if (!(hs >> tag >> q >> k) || tag != "TRPL" || q <= 0 || k <= 0) {
+            throw std::runtime_error("triples header malformed: " + header);
+        }
+
+        mul_store.assign(q, std::vector<DuAtAllahMultClient>(k));
+
+        for (int i = 0; i < q; ++i) {
+            for (int d = 0; d < k; ++d) {
+                std::string ln; 
+                co_await read_line(sock, buf, ln);  // line: "x y z"
+                std::istringstream ls(ln);
+                long long x, y, z;
+                if (!(ls >> x >> y >> z)) {
+                    std::ostringstream oss;
+                    oss << "triple parse error at (" << i << "," << d << ")";
+                    throw std::runtime_error(oss.str());
+                }
+                mul_store[i][d].x = x;
+                mul_store[i][d].y = y;
+                mul_store[i][d].z = z;
+            }
+        }
+    }
+
+    // Expect terminator: "TOK"
+    std::string tok;
+    co_await read_line(sock, buf, tok);
+    if (tok != "TOK") {
+        throw std::runtime_error("triples terminator missing (expected TOK), got: " + tok);
+    }
+
+    co_return;
+}
+
+
+// Fix this function to receive multiplication shares from P2
+/*awaitable<void> recv_all_mul_shares_from_P2(tcp::socket& sock, std::vector<std::vector<DuAtAllahMultClient>>& store) {
+    boost::asio::streambuf buf;
+    int idx = 0;
+    for (;;) {
+        std::string line1;
+        // skip empty lines
+        do { co_await read_line(sock, buf, line1); } while (line1.empty());
+
+        if (line1 == "OK") break;
+
+        std::vector<DuAtAllahMultClient> vmuls;
+        int k = 0;
+        std::istringstream issk(line1);
+        issk >> k;
+        vmuls.resize(k);
+
+        for(int i=0; i<k; i++){
+            std::string line2; co_await read_line(sock, buf, line2);
+            std::istringstream iss(line2);
+            iss >> vmuls[i].x >> vmuls[i].y >> vmuls[i].z;
+        }
+
+        // separator (can be blank, read and drop)
+        std::string sep; co_await read_line(sock, buf, sep);
+
+        store.emplace_back(std::move(vmuls));
+        idx++;
         // print_share_debug(store.back(), store.size());
     }
     std::cout << "Total shares received from P2: " << store.size() << std::endl;
     co_return;
-}
+}*/
 
 // ----------------------- Shares Read Write -----------------------
 static random_vector
@@ -362,6 +438,29 @@ static awaitable<void> recv_two_vecs_async(
     co_return;
 }
 
+// -------------------- Header of Beaver Triples Exchange --------------------
+static inline uint64_t add64(uint64_t a, uint64_t b) { return a + b; }
+static inline uint64_t sub64(uint64_t a, uint64_t b) { return a - b; }
+static inline uint64_t mul64(uint64_t a, uint64_t b) { return a * b; }
+
+// async scalar send/recv of two uint64 values (big-endian on wire)
+static inline boost::asio::awaitable<void>
+send_two_u64(boost::asio::ip::tcp::socket& sock, long long u0, long long u1) {
+    uint64_t be[2] = { h2be64(u0), h2be64(u1) };
+    co_await boost::asio::async_write(sock, boost::asio::buffer(be, sizeof(be)),
+                                      boost::asio::use_awaitable);
+    co_return;
+}
+static inline boost::asio::awaitable<void>
+recv_two_u64(boost::asio::ip::tcp::socket& sock, long long& u0, long long& u1) {
+    uint64_t be[2];
+    co_await boost::asio::async_read(sock, boost::asio::buffer(be, sizeof(be)),
+                                     boost::asio::use_awaitable);
+    u0 = be2h64(be[0]);
+    u1 = be2h64(be[1]);
+    co_return;
+}
+
 // ----------------------- Barriers to keep both clients in lockstep -----------------------
 awaitable<void> barrier_prep(tcp::socket& peer) {
 #ifdef ROLE_p0
@@ -435,9 +534,29 @@ static std::vector<std::vector<long long>> read_queries_file(const std::string& 
     return queries;
 }
 
+// ----------------------- MPC multiplication -----------------------
+static boost::asio::awaitable<long long> secure_mpc_multiplication(long long a, long long b, 
+                                                    DuAtAllahMultClient dmulc, 
+                                                    boost::asio::ip::tcp::socket& peer_sock){
+    long long myx = a + dmulc.x, myy = b + dmulc.y;
+    long long peerx, peery;
+
+    /*Do communication*/
+#ifdef ROLE_p0
+    co_await send_two_u64(peer_sock, myx, myy);
+    co_await recv_two_u64(peer_sock, peerx, peery);
+#else
+    co_await recv_two_u64(peer_sock, peerx, peery);
+    co_await send_two_u64(peer_sock, myx, myy);
+#endif
+
+    long long c = a*(b + peery) - b*(peerx) + dmulc.z;
+    co_return c;
+}
+
 // ----------------------- MPC dot product stub -----------------------
 static boost::asio::awaitable<long long> mpc_dot_product_async(const std::vector<long long>& q, const int qidx,
-                                 DuAtAllahClient& s,
+                                 DuAtAllahClient& s, std::vector<DuAtAllahMultClient>& vmuls,
                                  tcp::socket& peer_sock /* use for your protocol */) {
     
 
@@ -486,7 +605,13 @@ static boost::asio::awaitable<long long> mpc_dot_product_async(const std::vector
     addition_temp = item_share + peer_y_sums;
     long long delta = user_share.dot_product(addition_temp) - item_share.dot_product(peer_x_sums) + s.z;
     long long factor = (1-delta);
-    item_share *= factor;
+    // item_share *= factor;
+    // ---------------------------
+
+    for(int i=0; i< item_share.size(); i++){
+        item_share[i] = co_await secure_mpc_multiplication(item_share[i], factor, vmuls[i], peer_sock);
+    }
+    // ---------------------------
     user_share = user_share + item_share;
     
     append_result_share_to_file(qidx, user_share, user_idx);
@@ -502,7 +627,9 @@ awaitable<void> run(boost::asio::io_context& io_context) {
     // Step 1: connect to P2 and receive ALL shares (preprocessing)
     tcp::socket server_sock = co_await setup_server_connection(io_context, resolver);
     std::vector<DuAtAllahClient> received_shares;
-    co_await recv_all_shares_from_P2(server_sock, received_shares);
+    std::vector<std::vector<DuAtAllahMultClient>> received_mul_shares;
+    co_await recv_all_shares_from_P2(server_sock, received_shares, received_mul_shares);
+    // co_await recv_all_mul_shares_from_P2(server_sock, received_mul_shares);
 
     std::cout << (
 #ifdef ROLE_p0
@@ -540,7 +667,7 @@ awaitable<void> run(boost::asio::io_context& io_context) {
         co_await barrier_query(peer_sock, static_cast<uint32_t>(i));
 
         // compute the MPC dot product share
-        co_await mpc_dot_product_async(queries[i], i, received_shares[i], peer_sock);
+        co_await mpc_dot_product_async(queries[i], i, received_shares[i], received_mul_shares[i], peer_sock);
 
         // debug print
         std::cout << "Processed query #" << i << "\n";

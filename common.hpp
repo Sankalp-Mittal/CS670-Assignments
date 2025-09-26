@@ -20,6 +20,8 @@ namespace this_coro = boost::asio::this_coro;
 #define P1_USER_SHARES_FILE "/data/p1_shares/p1_U.txt"
 #define P0_QUERIES_SHARES_FILE "/data/p0_shares/p0_queries.txt"
 #define P1_QUERIES_SHARES_FILE "/data/p1_shares/p1_queries.txt"
+#define P0_MULT_SHARES_FILE "/data/p0_shares/p0_mult.txt"
+#define P1_MULT_SHARES_FILE "/data/p1_shares/p1_mult.txt"
 
 inline uint32_t random_uint32() {
     static std::random_device rd;
@@ -129,3 +131,24 @@ struct DuAtAllahServer{
         return {client0, client1};
     }
 };
+
+struct DuAtAllahMultClient{
+    long long x, y, z;
+
+    DuAtAllahMultClient(): x(0), y(0), z(0) {}
+};
+
+struct DuAtAllahMultServer{
+    long long x0, x1, y1, y0;
+    long long alpha;
+
+    DuAtAllahMultServer() {
+        x0 = random_uint32();
+        x1 = random_uint32();
+        y0 = random_uint32();
+        y1 = random_uint32();
+        alpha = random_uint32();
+    }
+};
+
+

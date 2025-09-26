@@ -16,6 +16,18 @@ inline auto make_random_once(int k) {
     return std::make_pair(std::move(client0), std::move(client1));
 }
 
+inline auto make_random_mul_once(){
+    DuAtAllahMultServer dmul_s;
+    DuAtAllahMultClient dmul_c0, dmul_c1;
+    dmul_c0.x = dmul_s.x0;
+    dmul_c0.y = dmul_s.y0;
+    dmul_c0.z = dmul_s.alpha;
+    dmul_c1.x = dmul_s.x1;
+    dmul_c1.y = dmul_s.y1;
+    dmul_c1.z = -dmul_s.alpha;
+    return std::make_pair(std::move(dmul_c0), std::move(dmul_c1));
+}
+
 // Append helper
 inline void append_shares(std::ofstream& f0, std::ofstream& f1, const DuAtAllahClient& s0, const DuAtAllahClient& s1) {
     
@@ -105,6 +117,16 @@ inline std::string serialize_share_text(const DuAtAllahClient& s) {
     return out;
 }
 
+static inline std::string serialize_triples_header(int q, int k) {
+    // One header line: "TRIPLES q k\n"
+    return "TRIPLES " + std::to_string(q) + " " + std::to_string(k) + "\n";
+}
+
+static inline std::string serialize_triple_line(const DuAtAllahMultClient& m) {
+    // One triple per line: "x y z\n"
+    return std::to_string(m.x) + " " + std::to_string(m.y) + " " + std::to_string(m.z) + "\n";
+}
+
 // send a serialized text blob to a socket
 static inline boost::asio::awaitable<void>
 send_text(tcp::socket& socket, const std::string& payload) {
@@ -120,16 +142,15 @@ boost::asio::awaitable<void> serve_pairs(tcp::socket socket_p0,
                                          int k)
 {
     try {
+        // ---------- SHARES BLOCK (UNCHANGED) ----------
         std::cout << "P2: streaming " << q << " share pairs (k=" << k << ") to P0 and P1\n";
 
         for (int i = 0; i < q; ++i) {
             auto [c0, c1] = make_random_once(k);
 
-            // serialize each side
-            std::string msg0 = serialize_share_text(c0);
+            std::string msg0 = serialize_share_text(c0); // X\nY\nz\n\n
             std::string msg1 = serialize_share_text(c1);
 
-            // send to each client
             co_await send_text(socket_p0, msg0);
             co_await send_text(socket_p1, msg1);
 
@@ -138,17 +159,94 @@ boost::asio::awaitable<void> serve_pairs(tcp::socket socket_p0,
             }
         }
 
-        // optional final ack for both clients
+        // End-of-shares sentinel (what your clients already expect)
         static constexpr char ok[] = "OK\n";
         co_await boost::asio::async_write(socket_p0, boost::asio::buffer(ok, sizeof(ok) - 1), boost::asio::use_awaitable);
         co_await boost::asio::async_write(socket_p1, boost::asio::buffer(ok, sizeof(ok) - 1), boost::asio::use_awaitable);
 
         std::cout << "P2: done streaming shares.\n";
+
+        // ---------- TRIPLES BLOCK (NEW) ----------
+        std::cout << "P2: streaming " << q << " multiplication triples (k=" << k << ") to P0 and P1\n";
+
+        // Header line so clients know counts for RAM allocation
+        std::string header = "TRPL " + std::to_string(q) + " " + std::to_string(k) + "\n";
+        co_await boost::asio::async_write(socket_p0, boost::asio::buffer(header), boost::asio::use_awaitable);
+        co_await boost::asio::async_write(socket_p1, boost::asio::buffer(header), boost::asio::use_awaitable);
+
+        // Send q*k triples as lines: "x y z\n" (per client)
+        for (int i = 0; i < q; ++i) {
+            for (int d = 0; d < k; ++d) {
+                auto [m0, m1] = make_random_mul_once();   // <-- your correlated randomness per dim
+
+                std::string ln0 = serialize_triple_line(m0); // "x y z\n"
+                std::string ln1 = serialize_triple_line(m1);
+                co_await boost::asio::async_write(socket_p0, boost::asio::buffer(ln0), boost::asio::use_awaitable);
+                co_await boost::asio::async_write(socket_p1, boost::asio::buffer(ln1), boost::asio::use_awaitable);
+            }
+        }
+
+        // End-of-triples sentinel
+        static constexpr char tok[] = "TOK\n";
+        co_await boost::asio::async_write(socket_p0, boost::asio::buffer(tok, sizeof(tok) - 1), boost::asio::use_awaitable);
+        co_await boost::asio::async_write(socket_p1, boost::asio::buffer(tok, sizeof(tok) - 1), boost::asio::use_awaitable);
+
+        std::cout << "P2: done streaming multiplication triples.\n";
     } catch (const std::exception& e) {
         std::cerr << "serve_pairs error: " << e.what() << "\n";
     }
     co_return;
 }
+
+
+/*boost::asio::awaitable<void> serve_mult_triple(tcp::socket &socket_p0,
+                                         tcp::socket &socket_p1,
+                                         int q,
+                                         int k)
+{
+    try {
+        std::cout << "P2: streaming " << q << " multiplication triples (k=" << k << ") to P0 and P1\n";
+
+        // First send a header line to each client
+        std::string header = serialize_triples_header(q, k);
+        co_await send_text(socket_p0, header);
+        co_await send_text(socket_p1, header);
+
+        for (int i = 0; i < q; ++i) {
+            const std::string size_line = std::to_string(k) + "\n";
+
+            co_await boost::asio::async_write(socket_p0,
+                boost::asio::buffer(size_line), boost::asio::use_awaitable);
+
+            co_await boost::asio::async_write(socket_p1,
+                boost::asio::buffer(size_line), boost::asio::use_awaitable);
+            for(int j = 0; j < k; j++){
+                auto [m0, m1] = make_random_mul_once();
+
+                // serialize each side
+                std::string msg0 = serialize_triple_line(m0);
+                std::string msg1 = serialize_triple_line(m1);
+
+                // send to each client
+                co_await send_text(socket_p0, msg0);
+                co_await send_text(socket_p1, msg1);
+            }
+            if ((i + 1) % 100 == 0 || i + 1 == q) {
+                std::cout << "  sent " << (i + 1) << "/" << q << " multiplication triples\n";
+            }
+        }
+
+        // optional final ack for both clients
+        static constexpr char ok[] = "OK\n";
+        co_await boost::asio::async_write(socket_p0, boost::asio::buffer(ok, sizeof(ok) - 1), boost::asio::use_awaitable);
+        co_await boost::asio::async_write(socket_p1, boost::asio::buffer(ok, sizeof(ok) - 1), boost::asio::use_awaitable);
+
+        std::cout << "P2: done streaming multiplication triples.\n";
+    } catch (const std::exception& e) {
+        std::cerr << "serve_mult_triple error: " << e.what() << "\n";
+    }
+    co_return;
+}*/
 
 // Run multiple coroutines in parallel
 template <typename... Fs>
@@ -185,6 +283,16 @@ int main() {
             // because serve_pairs() guarantees the i-th pair is split
             // consistently between P0 and P1.
         );
+
+        // run_in_parallel(io_context,
+        //     [&]() -> boost::asio::awaitable<void> {
+        //         // NEW: stream matched pairs to each client instead of dumping to files
+        //         co_await serve_mult_triple(socket_p0, socket_p1, q, k);
+        //     }
+        //     // NOTE: we no longer co-spawn two handle_client() here,
+        //     // because serve_pairs() guarantees the i-th pair is split
+        //     // consistently between P0 and P1.
+        // );
 
         io_context.run();
 
