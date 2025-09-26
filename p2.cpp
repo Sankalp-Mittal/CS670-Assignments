@@ -42,8 +42,7 @@ inline void append_shares(std::ofstream& f0, std::ofstream& f1, const DuAtAllahC
 }
 
 // Modified handle_client: q is passed as argument
-// (Kept as-is to preserve your comment; not used in the NEW streaming path below)
-boost::asio::awaitable<void> handle_client(tcp::socket socket,
+/*boost::asio::awaitable<void> handle_client(tcp::socket socket,
                                            const std::string& name,
                                            int q,
                                            int k,
@@ -77,9 +76,9 @@ boost::asio::awaitable<void> handle_client(tcp::socket socket,
         std::cerr << "Error in handle_client: " << e.what() << "\n";
     }
     co_return;
-}
+}*/
 
-// NEW: Serialize a client's share exactly like the file format (X line, Y line, z line, blank)
+// Serialize a client's share exactly like the file format (X line, Y line, z line, blank)
 inline std::string serialize_share_text(const DuAtAllahClient& s) {
     std::string out;
 
@@ -106,14 +105,14 @@ inline std::string serialize_share_text(const DuAtAllahClient& s) {
     return out;
 }
 
-// NEW: send a serialized text blob to a socket
+// send a serialized text blob to a socket
 static inline boost::asio::awaitable<void>
 send_text(tcp::socket& socket, const std::string& payload) {
     co_await boost::asio::async_write(socket, boost::asio::buffer(payload), boost::asio::use_awaitable);
     co_return;
 }
 
-// NEW: Single coroutine that generates pairs and streams s0->P0, s1->P1 each iteration.
+// Single coroutine that generates pairs and streams s0->P0, s1->P1 each iteration.
 // This guarantees both clients receive matching shares per query.
 boost::asio::awaitable<void> serve_pairs(tcp::socket socket_p0,
                                          tcp::socket socket_p1,
@@ -170,7 +169,7 @@ int main() {
         tcp::socket socket_p1(io_context);
         acceptor.accept(socket_p1);
 
-        std::ifstream fin("/data/queries.txt");
+        std::ifstream fin(P0_QUERIES_SHARES_FILE);
         int q,k;
         fin >> q >> k;
         fin.close();

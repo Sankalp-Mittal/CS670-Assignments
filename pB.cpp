@@ -5,7 +5,6 @@
 #include <boost/asio/detached.hpp>
 #include <boost/asio/write.hpp>
 #include <boost/asio/read.hpp>
-// NEW:
 #include <boost/asio/streambuf.hpp>
 #include <boost/asio/connect.hpp>
 #include <iostream>
@@ -76,16 +75,16 @@ awaitable<void> exchange_blinded(tcp::socket socket, uint32_t value_to_send) {
 
 static inline const char* user_matrix_path() {
 #ifdef ROLE_p0
-    return "/data/p0_shares/p0_U.txt";
+    return P0_USER_SHARES_FILE;
 #else
-    return "/data/p1_shares/p1_U.txt";
+    return P1_USER_SHARES_FILE;
 #endif
 }
-static inline const char* item_matrix_path() {
+static inline const char* query_path() {
 #ifdef ROLE_p0
-    return "/data/p0_shares/p0_V.txt";
+    return P0_QUERIES_SHARES_FILE;
 #else
-    return "/data/p1_shares/p1_V.txt";
+    return P1_QUERIES_SHARES_FILE;
 #endif
 }
 
@@ -170,15 +169,6 @@ static inline random_vector parse_int_line(const std::string& line) {
     random_vector rv(out.size());
     return rv;
 }
-
-/*static inline void print_share_debug(const DuAtAllahClient& s, std::size_t idx) {
-    std::cout << "Share #" << idx << ":\n";
-    std::cout << "  X: ";
-    for (std::size_t i = 0; i < s.X.size(); ++i) { if (i) std::cout << ' '; std::cout << s.X[i]; }
-    std::cout << "\n  Y: ";
-    for (std::size_t i = 0; i < s.Y.size(); ++i) { if (i) std::cout << ' '; std::cout << s.Y[i]; }
-    std::cout << "\n  z: " << s.z << "\n";
-}*/
 
 awaitable<void> recv_all_shares_from_P2(tcp::socket& sock, std::vector<DuAtAllahClient>& store) {
     boost::asio::streambuf buf;
@@ -407,7 +397,7 @@ awaitable<void> barrier_query(tcp::socket& peer, uint32_t idx) {
 }
 
 // ----------------------- Query file loader -----------------------
-static std::vector<std::vector<long long>> read_queries_file(const std::string& path, int expected_k) {
+static std::vector<std::vector<long long>> read_queries_file(const std::string& path) {
     std::ifstream fin(path);
     std::vector<std::vector<long long>> queries;
     if (!fin) {
@@ -416,49 +406,55 @@ static std::vector<std::vector<long long>> read_queries_file(const std::string& 
     }
     long long q = 0;
     if (!(fin >> q)) {
-        std::cerr << "/data/queries.txt: first token must be q\n";
+        std::cerr << path <<": first token must be q\n";
         return queries;
     }
     queries.reserve(static_cast<size_t>(q));
     long long k = 0;
     if (!(fin >> k)) {
-        std::cerr << "/data/queries.txt: second token must be k\n";
+        std::cerr << path <<": second token must be k\n";
         return queries;
     }
 
     //Temp Solution make update to item oblivious
-    expected_k = 2;
+    long long expected_len = k+1;
     for (long long i = 0; i < q; ++i) {
-        std::vector<long long> v(expected_k);
-        for (int j = 0; j < expected_k; ++j) {
+        std::vector<long long> v(expected_len);
+        for (int j = 0; j < expected_len; ++j) {
             if (!(fin >> v[j])) {
-                std::cerr << "/data/queries.txt: not enough numbers on query " << i << " (expected " << expected_k << ")\n";
-                v.resize(j);
-                break;
+                std::ostringstream oss;
+                oss << path <<": not enough numbers on query " << i << " (expected " << expected_len << ")\n";
+                throw std::runtime_error(oss.str());
+                // v.resize(j);
+                // break;
             }
         }
-        if ((int)v.size() == expected_k) queries.emplace_back(std::move(v));
+        if ((int)v.size() == expected_len) queries.emplace_back(std::move(v));
         else break;
     }
     return queries;
 }
 
 // ----------------------- MPC dot product stub -----------------------
-static boost::asio::awaitable<long long> mpc_dot_product_async(const std::vector<long long>& q,
+static boost::asio::awaitable<long long> mpc_dot_product_async(const std::vector<long long>& q, const int qidx,
                                  DuAtAllahClient& s,
                                  tcp::socket& peer_sock /* use for your protocol */) {
     
-    if (q.size() != 2) throw std::runtime_error("q must have two entries (n, m)");
-    const int user_idx = static_cast<int>(q[0]);
-    const int item_idx = static_cast<int>(q[1]);
-    std::cout<<"query is: "<<user_idx<<" ,"<<item_idx<<"\n";
+
+    const long long user_idx = static_cast<long long>(q[0]);
+    // const int item_idx = static_cast<int>(q[1]);
+
+    std::cout<<"query is by user #"<< user_idx <<"\n";
 
     // 1) Load my shares for this (user,row) and (item,row) from files (based on ROLE)
     const std::string U_path = user_matrix_path();
-    const std::string V_path = item_matrix_path();
+    // const std::string V_path = item_matrix_path();
 
     random_vector user_share = read_row_from_matrix_file(U_path, user_idx);
-    random_vector item_share = read_row_from_matrix_file(V_path, item_idx);
+    // random_vector item_share = read_row_from_matrix_file(V_path, item_idx);
+    random_vector item_share(q.size()-1);
+
+    for(int i=1 ; i<q.size() ; i++) item_share[i-1] = q[i];
 
     // 2) Prepare a vector derived from s to exchange with the peer.
     //    (Pick X or Y or any aux you require; here we send s.X as an example.)
@@ -471,7 +467,7 @@ static boost::asio::awaitable<long long> mpc_dot_product_async(const std::vector
     // for (int i=0; i<s.X.size(); i++) my_x_sums = (s.X) + (user_share);
     // for (int i=0; i<s.Y.size(); i++) my_y_sums = (s.Y) + (item_share);
 
-    uint32_t peer_qidx = 0, qidx_for_sanity = 0; // or 0 if you don't track it
+    uint32_t peer_qidx = qidx, qidx_for_sanity = qidx;
     random_vector peer_x_sums, peer_y_sums;
 
     #ifdef ROLE_p0
@@ -493,7 +489,7 @@ static boost::asio::awaitable<long long> mpc_dot_product_async(const std::vector
     item_share *= factor;
     user_share = user_share + item_share;
     
-    append_result_share_to_file(0, user_share, user_idx);
+    append_result_share_to_file(qidx, user_share, user_idx);
     update_row_in_matrix_file(U_path, user_idx, user_share.data);
 
     co_return 0LL;
@@ -524,7 +520,7 @@ awaitable<void> run(boost::asio::io_context& io_context) {
 
     // Step 4: read queries (same file path inside both containers)
     const int k = received_shares.empty() ? 0 : static_cast<int>(received_shares.front().X.size());
-    auto queries = read_queries_file("/data/queries.txt", k);
+    auto queries = read_queries_file(query_path());
 
     std::cout<<"Read "<<queries.size()<<" queries from the file\n";
     if (k == 0 || queries.empty()) {
@@ -543,14 +539,8 @@ awaitable<void> run(boost::asio::io_context& io_context) {
         std::cout<<"processing query #"<<i<<"\n";
         co_await barrier_query(peer_sock, static_cast<uint32_t>(i));
 
-        // (optional) dump the share we are about to use
-        // append_my_share_to_file(received_shares[i], i);
-
-        // compute the MPC dot product share (you will implement the real protocol)
-        co_await mpc_dot_product_async(queries[i], received_shares[i], peer_sock);
-
-        // persist result share
-        // append_result_share_to_file(i, my_result_share, queries[i]);
+        // compute the MPC dot product share
+        co_await mpc_dot_product_async(queries[i], i, received_shares[i], peer_sock);
 
         // debug print
         std::cout << "Processed query #" << i << "\n";

@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <stdexcept>
 #include <sstream>
+#include "common.hpp"
 struct Args {
     int m, n, k, q;
     bool have_seed = false;
@@ -21,7 +22,7 @@ static bool starts_with(const std::string& s, const std::string& p) {
 static Args parse_args(int argc, char* argv[]) {
     if (argc < 5) {
         throw std::runtime_error(
-            "Usage: ./gen_queries <m> <n> <k> <q> [--seed=SEED] [--packets] [--debug]");
+            "Usage: ./gen_queries <m> <n> <k> <q> [--seed=SEED] [--debug]");
     }
     Args a{};
     a.m = std::stoi(argv[1]);
@@ -36,8 +37,6 @@ static Args parse_args(int argc, char* argv[]) {
         if (starts_with(arg, "--seed=")) {
             a.have_seed = true;
             a.seed = std::stoull(arg.substr(8));
-        } else if (arg == "--packets") {
-            a.packets = true;
         } else if (arg == "--debug") {       // NEW
             a.debug = true;
         } else {
@@ -123,10 +122,10 @@ int main(int argc, char* argv[]) {
             }
         };
 
-        write_matrix("/data/p0_shares/p0_U.txt", m, k, U0);
-        write_matrix("/data/p1_shares/p1_U.txt", m, k, U1);
-        write_matrix("/data/p0_shares/p0_V.txt", n, k, V0);
-        write_matrix("/data/p1_shares/p1_V.txt", n, k, V1);
+        write_matrix(P0_USER_SHARES_FILE, m, k, U0);
+        write_matrix(P1_USER_SHARES_FILE, m, k, U1);
+        // write_matrix("/data/p0_shares/p0_V.txt", n, k, V0);
+        // write_matrix("/data/p1_shares/p1_V.txt", n, k, V1);
 
         // Generate queries (i, j)
         std::vector<std::pair<int,int>> queries(q);
@@ -137,37 +136,33 @@ int main(int argc, char* argv[]) {
         }
 
         // Write queries file: q then q lines "i j"
-        {
-            std::ofstream fq("/data/queries.txt");
-            if (!fq) throw std::runtime_error("Failed to open queries.txt");
-            fq << q << " " << k << "\n";
-            for (size_t idx = 0; idx < queries.size(); ++idx) {
-                const int i = queries[idx].first;
-                const int j = queries[idx].second;
-                fq << i << " " << j << "\n";
-            }
-        }
+        // {
+        //     std::ofstream fq("/data/queries.txt");
+        //     if (!fq) throw std::runtime_error("Failed to open queries.txt");
+        //     fq << q << " " << k << "\n";
+        //     for (size_t idx = 0; idx < queries.size(); ++idx) {
+        //         const int i = queries[idx].first;
+        //         const int j = queries[idx].second;
+        //         fq << i << " " << j << "\n";
+        //     }
+        // }
 
         // Optional: per-query packets for each party (pulled from pre-shared matrices)
-        if (args.packets) {
-            std::ofstream f0("p0_queries.txt"), f1("p1_queries.txt");
-            if (!f0 || !f1) throw std::runtime_error("Failed to open p0_queries.txt/p1_queries.txt");
-            f0 << m << " " << n << " " << k << " " << q << "\n";
-            f1 << m << " " << n << " " << k << " " << q << "\n";
-            for (size_t idx = 0; idx < queries.size(); ++idx) {
-                const int i = queries[idx].first;
-                const int j = queries[idx].second;
+        std::ofstream f0(P0_QUERIES_SHARES_FILE), f1(P1_QUERIES_SHARES_FILE);
+        if (!f0 || !f1) throw std::runtime_error("Failed to open p0_queries.txt/p1_queries.txt");
+        f0 << q << " " << k << "\n";
+        f1 << q << " " << k << "\n";
+        for (size_t idx = 0; idx < queries.size(); ++idx) {
+            const int i = queries[idx].first;
+            const int j = queries[idx].second;
 
-                f0 << i << " " << j;
-                for (int d = 0; d < k; ++d) f0 << " " << U0[i][d];
-                for (int d = 0; d < k; ++d) f0 << " " << V0[j][d];
-                f0 << "\n";
+            f0 << i << " ";
+            for (int d = 0; d < k; ++d) f0 << " " << V0[j][d];
+            f0 << "\n";
 
-                f1 << i << " " << j;
-                for (int d = 0; d < k; ++d) f1 << " " << U1[i][d];
-                for (int d = 0; d < k; ++d) f1 << " " << V1[j][d];
-                f1 << "\n";
-            }
+            f1 << i << " ";
+            for (int d = 0; d < k; ++d) f1 << " " << V1[j][d];
+            f1 << "\n";
         }
 
         // DEBUG OUTPUTS — only when --debug
@@ -195,14 +190,23 @@ int main(int argc, char* argv[]) {
                 for (size_t idx = 0; idx < queries.size(); ++idx) {
                     fd << queries[idx].first << " " << queries[idx].second << "\n";
                 }
+                // Write queries file: q then q lines "i j"
+                {
+                    std::ofstream fq("/data/plain_queries.txt");
+                    if (!fq) throw std::runtime_error("Failed to open plain_queries.txt");
+                    fq << q << " " << k << "\n";
+                    for (size_t idx = 0; idx < queries.size(); ++idx) {
+                        const int i = queries[idx].first;
+                        const int j = queries[idx].second;
+                        fq << i << " " << j << "\n";
+                    }
+                }
             }
 
             // console debug summary
             std::cout << "Wrote:\n"
-                      << "  /data/p0_shares/p0_U.txt, /data/p1_shares/p1_U.txt (matrix shares of U)\n"
-                      << "  /data/p0_shares/p0_V.txt, /data/p1_shares/p1_V.txt (matrix shares of V)\n"
-                      << "  /data/queries.txt (q lines of i j)\n";
-            if (args.packets) std::cout << "  p0_queries.txt, p1_queries.txt (per-query packets)\n";
+                      << P0_USER_SHARES_FILE << "," << P1_USER_SHARES_FILE << "(matrix shares of U)\n"
+                      << P0_QUERIES_SHARES_FILE << "," << P1_QUERIES_SHARES_FILE << "(matrix shares of U)\n";
             std::cout << "(Debug) plain_UV.txt with true values (do NOT give to parties)\n";
         }
 

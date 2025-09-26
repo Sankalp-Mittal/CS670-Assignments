@@ -16,6 +16,10 @@ using boost::asio::ip::tcp;
 namespace this_coro = boost::asio::this_coro;
 
 #define UPPER_LIM 100
+#define P0_USER_SHARES_FILE "/data/p0_shares/p0_U.txt"
+#define P1_USER_SHARES_FILE "/data/p1_shares/p1_U.txt"
+#define P0_QUERIES_SHARES_FILE "/data/p0_shares/p0_queries.txt"
+#define P1_QUERIES_SHARES_FILE "/data/p1_shares/p1_queries.txt"
 
 inline uint32_t random_uint32() {
     static std::random_device rd;
