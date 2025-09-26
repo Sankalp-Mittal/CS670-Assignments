@@ -23,6 +23,36 @@ using boost::asio::ip::tcp;
 #error "ROLE must be defined as ROLE_p0 or ROLE_p1"
 #endif
 
+// --- endian helpers (wire = big-endian) ---
+static inline uint64_t h2be64(uint64_t x){
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+    return __builtin_bswap64(x);
+#else
+    return x;
+#endif
+}
+static inline uint64_t be2h64(uint64_t x){
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+    return __builtin_bswap64(x);
+#else
+    return x;
+#endif
+}
+static inline uint32_t h2be32(uint32_t x){
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+    return __builtin_bswap32(x);
+#else
+    return x;
+#endif
+}
+static inline uint32_t be2h32(uint32_t x){
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+    return __builtin_bswap32(x);
+#else
+    return x;
+#endif
+}
+
 // ----------------------- Helper coroutines -----------------------
 awaitable<void> send_coroutine(tcp::socket& sock, uint32_t value) {
     co_await boost::asio::async_write(sock, boost::asio::buffer(&value, sizeof(value)), use_awaitable);
@@ -42,6 +72,21 @@ awaitable<void> exchange_blinded(tcp::socket socket, uint32_t value_to_send) {
 
     std::cout << "Received blinded value from other party: " << received << std::endl;
     co_return;
+}
+
+static inline const char* user_matrix_path() {
+#ifdef ROLE_p0
+    return "/data/p0_shares/p0_U.txt";
+#else
+    return "/data/p1_shares/p1_U.txt";
+#endif
+}
+static inline const char* item_matrix_path() {
+#ifdef ROLE_p0
+    return "/data/p0_shares/p0_V.txt";
+#else
+    return "/data/p1_shares/p1_V.txt";
+#endif
 }
 
 // ----------------------- Setup connections -----------------------
@@ -78,11 +123,6 @@ awaitable<tcp::socket> setup_peer_connection(boost::asio::io_context& io_context
 }
 
 // ----------------------- NEW: Share reception + storage -----------------------
-struct ReceivedShare {
-    std::vector<int> X;
-    std::vector<int> Y;
-    int z = 0;
-};
 
 static inline void rstrip_cr(std::string& s) {
     if (!s.empty() && s.back() == '\r') s.pop_back();
@@ -96,15 +136,16 @@ awaitable<void> read_line(tcp::socket& sock, boost::asio::streambuf& buf, std::s
     co_return;
 }
 
-static inline std::vector<int> parse_int_line(const std::string& line) {
-    std::vector<int> out;
+static inline random_vector parse_int_line(const std::string& line) {
+    std::vector<long long> out;
     std::istringstream iss(line);
     int v;
     while (iss >> v) out.push_back(v);
-    return out;
+    random_vector rv(out.size());
+    return rv;
 }
 
-static inline void print_share_debug(const ReceivedShare& s, std::size_t idx) {
+static inline void print_share_debug(const DuAtAllahClient& s, std::size_t idx) {
     std::cout << "Share #" << idx << ":\n";
     std::cout << "  X: ";
     for (std::size_t i = 0; i < s.X.size(); ++i) { if (i) std::cout << ' '; std::cout << s.X[i]; }
@@ -113,7 +154,7 @@ static inline void print_share_debug(const ReceivedShare& s, std::size_t idx) {
     std::cout << "\n  z: " << s.z << "\n";
 }
 
-awaitable<void> recv_all_shares_from_P2(tcp::socket& sock, std::vector<ReceivedShare>& store) {
+awaitable<void> recv_all_shares_from_P2(tcp::socket& sock, std::vector<DuAtAllahClient>& store) {
     boost::asio::streambuf buf;
     for (;;) {
         std::string line1;
@@ -122,8 +163,9 @@ awaitable<void> recv_all_shares_from_P2(tcp::socket& sock, std::vector<ReceivedS
 
         if (line1 == "OK") break;
 
-        ReceivedShare s;
-        s.X = parse_int_line(line1);
+        random_vector rv_temp = parse_int_line(line1);
+        DuAtAllahClient s(rv_temp.size());
+        s.X = rv_temp;
 
         std::string line2; co_await read_line(sock, buf, line2);
         s.Y = parse_int_line(line2);
@@ -141,7 +183,167 @@ awaitable<void> recv_all_shares_from_P2(tcp::socket& sock, std::vector<ReceivedS
     co_return;
 }
 
-// ----------------------- NEW: File persistence -----------------------
+// ----------------------- Shares Read Write -----------------------
+static random_vector
+read_row_from_matrix_file(const std::string& path, int row_index /*0-based*/) {
+    std::ifstream f(path);
+    if (!f) throw std::runtime_error("Failed to open " + path);
+
+    int rows=0, cols=0;
+    if (!(f >> rows >> cols)) {
+        throw std::runtime_error("Bad header in " + path);
+    }
+    if (row_index < 0 || row_index >= rows) {
+        throw std::runtime_error("Row index out of range in " + path);
+    }
+
+    // skip rows before target
+    std::string line;
+    std::getline(f, line); // consume end of header line
+    for (int r = 0; r < row_index; ++r) {
+        std::getline(f, line);
+        if (!f) throw std::runtime_error("Unexpected EOF while skipping rows in " + path);
+    }
+
+    // read the row
+    std::getline(f, line);
+    if (!f) throw std::runtime_error("Unexpected EOF reading row in " + path);
+
+    std::istringstream iss(line);
+    std::vector<long long> row;
+    row.reserve(cols);
+    for (int c = 0; c < cols; ++c) {
+        long long v;
+        if (!(iss >> v)) {
+            throw std::runtime_error("Row parse error in " + path);
+        }
+        row.push_back(v);
+    }
+    random_vector vec(row.size());
+    vec.data = row;
+    return vec;
+}
+
+// --- optional: write back one row (safe rewrite via temp file+rename) ---
+static void
+update_row_in_matrix_file(const std::string& path, int row_index,
+                          const std::vector<long long>& newrow) {
+    // Read entire matrix
+    std::ifstream f(path);
+    if (!f) throw std::runtime_error("Failed to open " + path);
+
+    int rows=0, cols=0;
+    if (!(f >> rows >> cols)) throw std::runtime_error("Bad header in " + path);
+    if (row_index < 0 || row_index >= rows)
+        throw std::runtime_error("Row index out of range for update in " + path);
+
+    std::vector<std::vector<long long>> M(rows, std::vector<long long>(cols));
+    for (int r = 0; r < rows; ++r) {
+        for (int c = 0; c < cols; ++c) {
+            if (!(f >> M[r][c])) throw std::runtime_error("Matrix body parse error in " + path);
+        }
+    }
+    if ((int)newrow.size() != cols)
+        throw std::runtime_error("New row has wrong length in update for " + path);
+
+    // Update row
+    M[row_index] = newrow;
+
+    // Rewrite atomically
+    const std::string tmp = path + ".tmp";
+    {
+        std::ofstream out(tmp);
+        if (!out) throw std::runtime_error("Failed to open temp " + tmp);
+        out << rows << " " << cols << "\n";
+        for (int r = 0; r < rows; ++r) {
+            for (int c = 0; c < cols; ++c) {
+                if (c) out << ' ';
+                out << M[r][c];
+            }
+            out << "\n";
+        }
+    }
+    // Replace
+    std::remove(path.c_str()); // ignore result
+    if (std::rename(tmp.c_str(), path.c_str()) != 0) {
+        throw std::runtime_error("Failed to rename " + tmp + " -> " + path);
+    }
+}
+
+// --- header for exchanging two vectors ---
+struct VecPairHeader {
+    uint32_t magic;     // 'DXCH' = 0x44584348
+    uint32_t version;   // 1
+    uint32_t query_idx; // optional sanity
+    uint32_t len_x;
+    uint32_t len_y;
+};
+
+// async send two int64 vectors (big-endian on wire)
+static awaitable<void> send_two_vecs_async(
+    tcp::socket& sock,
+    uint32_t query_idx,
+    const random_vector &vx,
+    const random_vector &vy)
+{
+    VecPairHeader h{
+        h2be32(0x44584348u),
+        h2be32(1u),
+        h2be32(query_idx),
+        h2be32(static_cast<uint32_t>(vx.data.size())),
+        h2be32(static_cast<uint32_t>(vy.data.size()))
+    };
+
+    co_await boost::asio::async_write(sock, boost::asio::buffer(&h, sizeof(h)), use_awaitable);
+
+    if (!vx.empty()) {
+        std::vector<uint64_t> tmp(vx.data.size());
+        for (size_t i = 0; i < vx.data.size(); ++i) tmp[i] = h2be64(static_cast<uint64_t>(vx[i]));
+        co_await boost::asio::async_write(sock, boost::asio::buffer(tmp.data(), tmp.size()*sizeof(uint64_t)), use_awaitable);
+    }
+    if (!vy.empty()) {
+        std::vector<uint64_t> tmp(vy.data.size());
+        for (size_t i = 0; i < vy.data.size(); ++i) tmp[i] = h2be64(static_cast<uint64_t>(vy[i]));
+        co_await boost::asio::async_write(sock, boost::asio::buffer(tmp.data(), tmp.size()*sizeof(uint64_t)), use_awaitable);
+    }
+    co_return;
+}
+
+// async recv two int64 vectors (big-endian on wire)
+static awaitable<void> recv_two_vecs_async(
+    tcp::socket& sock,
+    uint32_t& query_idx_out,
+    random_vector &vx_out,
+    random_vector &vy_out)
+{
+    VecPairHeader h{};
+    co_await boost::asio::async_read(sock, boost::asio::buffer(&h, sizeof(h)), use_awaitable);
+
+    const uint32_t magic = be2h32(h.magic);
+    const uint32_t ver   = be2h32(h.version);
+    const uint32_t qidx  = be2h32(h.query_idx);
+    const uint32_t lx    = be2h32(h.len_x);
+    const uint32_t ly    = be2h32(h.len_y);
+    if (magic != 0x44584348u || ver != 1u) throw std::runtime_error("bad exchange header");
+
+    query_idx_out = qidx;
+    vx_out.data.resize(lx);
+    vy_out.data.resize(ly);
+
+    if (lx) {
+        std::vector<uint64_t> tmp(lx);
+        co_await boost::asio::async_read(sock, boost::asio::buffer(tmp.data(), tmp.size()*sizeof(uint64_t)), use_awaitable);
+        for (size_t i=0;i<tmp.size();++i) vx_out[i] = static_cast<long long>(be2h64(tmp[i]));
+    }
+    if (ly) {
+        std::vector<uint64_t> tmp(ly);
+        co_await boost::asio::async_read(sock, boost::asio::buffer(tmp.data(), tmp.size()*sizeof(uint64_t)), use_awaitable);
+        for (size_t i=0;i<tmp.size();++i) vy_out[i] = static_cast<long long>(be2h64(tmp[i]));
+    }
+    co_return;
+}
+
+// ----------------------- File persistence -----------------------
 #ifdef ROLE_p0
 static constexpr const char* SHARE_LOG_PATH  = "/data/client0.shares";
 static constexpr const char* RESULT_LOG_PATH = "/data/client0.results";
@@ -150,7 +352,7 @@ static constexpr const char* SHARE_LOG_PATH  = "/data/client1.shares";
 static constexpr const char* RESULT_LOG_PATH = "/data/client1.results";
 #endif
 
-static inline void append_my_share_to_file(const ReceivedShare& s, std::size_t idx) {
+static inline void append_my_share_to_file(const DuAtAllahClient& s, std::size_t idx) {
     std::ofstream f(SHARE_LOG_PATH, std::ios::app);
     if (!f) { std::cerr << "Failed to open " << SHARE_LOG_PATH << " for append\n"; return; }
     f << "# query " << idx << "\n";
@@ -167,7 +369,7 @@ static inline void append_result_share_to_file(std::size_t idx, long long my_sha
     f << "\n";
 }
 
-// ----------------------- NEW: Barriers to keep both clients in lockstep -----------------------
+// ----------------------- Barriers to keep both clients in lockstep -----------------------
 awaitable<void> barrier_prep(tcp::socket& peer) {
 #ifdef ROLE_p0
     uint32_t code = 1; // PREP
@@ -201,7 +403,7 @@ awaitable<void> barrier_query(tcp::socket& peer, uint32_t idx) {
     co_return;
 }
 
-// ----------------------- NEW: Query file loader -----------------------
+// ----------------------- Query file loader -----------------------
 static std::vector<std::vector<long long>> read_queries_file(const std::string& path, int expected_k) {
     std::ifstream fin(path);
     std::vector<std::vector<long long>> queries;
@@ -231,13 +433,61 @@ static std::vector<std::vector<long long>> read_queries_file(const std::string& 
 }
 
 // ----------------------- NEW: MPC dot product stub (fill this) -----------------------
-static long long mpc_dot_product(const std::vector<long long>& q,
-                                 const ReceivedShare& s,
+static boost::asio::awaitable<long long> mpc_dot_product_async(const std::vector<long long>& q,
+                                 DuAtAllahClient& s,
                                  tcp::socket& peer_sock /* use for your protocol */) {
-    // TODO: replace with your real MPC dot product using s.(X,Y,z) and peer communication.
-    // For now, return 0 as a placeholder.
-    (void)q; (void)s; (void)peer_sock;
-    return 0;
+    
+    if (q.size() != 2) throw std::runtime_error("q must have two entries (n, m)");
+    const int user_idx = static_cast<int>(q[0]);
+    const int item_idx = static_cast<int>(q[1]);
+
+    // 1) Load my shares for this (user,row) and (item,row) from files (based on ROLE)
+    const std::string U_path = user_matrix_path();
+    const std::string V_path = item_matrix_path();
+
+    random_vector user_share = read_row_from_matrix_file(U_path, user_idx);
+    random_vector item_share = read_row_from_matrix_file(V_path, item_idx);
+
+    // 2) Prepare a vector derived from s to exchange with the peer.
+    //    (Pick X or Y or any aux you require; here we send s.X as an example.)
+    random_vector my_x_sums, my_y_sums;
+    my_x_sums.data.reserve(s.X.size());
+    my_y_sums.data.reserve(s.X.size());
+
+    my_x_sums = s.X + user_share;
+    my_y_sums = s.Y + item_share;
+    // for (int i=0; i<s.X.size(); i++) my_x_sums = (s.X) + (user_share);
+    // for (int i=0; i<s.Y.size(); i++) my_y_sums = (s.Y) + (item_share);
+
+    uint32_t peer_qidx = 0, qidx_for_sanity = 0; // or 0 if you don't track it
+    random_vector peer_x_sums, peer_y_sums;
+
+    #ifdef ROLE_p0
+    co_await send_two_vecs_async(peer_sock, qidx_for_sanity, my_x_sums, my_y_sums);
+    co_await recv_two_vecs_async(peer_sock, peer_qidx, peer_x_sums, peer_y_sums);
+    #else
+    co_await recv_two_vecs_async(peer_sock, peer_qidx, peer_x_sums, peer_y_sums);
+    co_await send_two_vecs_async(peer_sock, qidx_for_sanity, my_x_sums, my_y_sums);
+    #endif
+
+    if (peer_qidx != qidx_for_sanity) throw std::runtime_error("peer query index mismatch");
+    if (peer_x_sums.size() != my_x_sums.size() || peer_y_sums.size() != my_y_sums.size())
+        throw std::runtime_error("peer vector length mismatch");
+
+    // 4) --- YOUR COMPUTATION HERE ---
+    random_vector addition_temp;
+    addition_temp = item_share + peer_y_sums;
+    long long delta = user_share.dot_product(addition_temp) - item_share.dot_product(peer_x_sums) + s.z;
+    long long factor = (1-delta);
+    user_share *= factor;
+
+    // 6) (Optional) Persist the updated row back to the matrix file so the change survives
+    //    Comment out if you only want in-memory updates.
+    update_row_in_matrix_file(U_path, user_idx, user_share.data);
+
+    // Return your scalar share result for this dot-product (fill this as needed).
+    // For now, placeholder 0 until you implement the MPC math.
+    co_return 0LL;
 }
 
 // ----------------------- Main protocol -----------------------
@@ -246,7 +496,7 @@ awaitable<void> run(boost::asio::io_context& io_context) {
 
     // Step 1: connect to P2 and receive ALL shares (preprocessing)
     tcp::socket server_sock = co_await setup_server_connection(io_context, resolver);
-    std::vector<ReceivedShare> received_shares;
+    std::vector<DuAtAllahClient> received_shares;
     co_await recv_all_shares_from_P2(server_sock, received_shares);
 
     std::cout << (
@@ -282,13 +532,13 @@ awaitable<void> run(boost::asio::io_context& io_context) {
         co_await barrier_query(peer_sock, static_cast<uint32_t>(i));
 
         // (optional) dump the share we are about to use
-        append_my_share_to_file(received_shares[i], i);
+        // append_my_share_to_file(received_shares[i], i);
 
         // compute the MPC dot product share (you will implement the real protocol)
-        long long my_result_share = mpc_dot_product(queries[i], received_shares[i], peer_sock);
+        long long my_result_share = co_await mpc_dot_product_async(queries[i], received_shares[i], peer_sock);
 
         // persist result share
-        append_result_share_to_file(i, my_result_share, queries[i]);
+        // append_result_share_to_file(i, my_result_share, queries[i]);
 
         // debug print
         std::cout << "Processed query #" << i << ", my_result_share=" << my_result_share << "\n";

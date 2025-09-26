@@ -30,9 +30,11 @@ inline uint32_t blind_value(uint32_t v) {
 }
 
 struct random_vector{
-    std::vector<int> data;
+    std::vector<long long> data;
 
-    random_vector(size_t k) : data(k) {
+    random_vector() = default;  
+
+    explicit random_vector(size_t k) : data(k) {
         std::random_device rd;
         std::mt19937 gen(rd());
         std::uniform_int_distribution<> dist(-UPPER_LIM, UPPER_LIM);
@@ -43,11 +45,11 @@ struct random_vector{
         }
     }
 
-    int& operator[](size_t i) {
+    long long& operator[](size_t i) {
         return data[i];
     }
 
-    const int& operator[](size_t i) const {
+    const long long& operator[](size_t i) const {
         return data[i];
     }
 
@@ -56,41 +58,69 @@ struct random_vector{
         return data.size();
     }
 
-    int dot_product(random_vector& x){
-        int val = 0;
-        int k = this->data.size();
+    long long dot_product(random_vector& x){
+        long long val = 0;
+        long long k = this->data.size();
         for(int i=0;i<k;i++){
             val += data[i]*(x.data[i]);
         }
         return val;
     }
+
+    void resize(size_t len){
+        data.resize(len);
+    }
+
+    bool empty() const noexcept{
+        return data.empty();
+    }
 };
 
+random_vector operator+(random_vector& a, random_vector& b){
+    if(a.data.size()!=b.data.size()){
+        throw std::runtime_error("Vectors cannot be added size mismatch");
+    }
+    random_vector ans(0);
+    ans.resize(a.data.size());
+    for(int i=0;i<a.data.size();i++){
+        ans[i] = a[i] + b[i];
+    }
+    return ans;
+}
+
+void operator*=(random_vector& a, long long& scale){
+    random_vector ans(0);
+    ans.resize(a.data.size());
+    for(int i=0;i<a.data.size();i++){
+        a[i] = a[i]*scale;
+    }
+}
+
 struct DuAtAllahClient{
-    std::vector<int> X, Y;
-    int z;
+    random_vector X, Y;
+    long long z;
+
+    DuAtAllahClient(int k) : X(k), Y(k){
+        z = (long long)random_uint32();
+    }
 };
 
 struct DuAtAllahServer{
     random_vector X0, X1, Y0, Y1;
-    int alpha;
+    long long alpha;
 
     DuAtAllahServer(int k) : X0(k), X1(k), Y0(k), Y1(k) {
         alpha = random_uint32();
     }
 
     std::pair<DuAtAllahClient,DuAtAllahClient> generate_client_shares(){
-        DuAtAllahClient client0, client1;
         int k = X0.size();
-        client0.X.resize(k);
-        client0.Y.resize(k);
-        client0.X = X0.data;
-        client0.Y = Y0.data;
+        DuAtAllahClient client0(k), client1(k);
+        client0.X = X0;
+        client0.Y = Y0;
         client0.z = X0.dot_product(Y1) + alpha;
-        client1.X.resize(k);
-        client1.Y.resize(k);
-        client1.X = X1.data;
-        client1.Y = Y1.data;
+        client1.X = X1;
+        client1.Y = Y1;
         client1.z = Y0.dot_product(X1) - alpha;
         return {client0, client1};
     }
