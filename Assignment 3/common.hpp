@@ -1,0 +1,160 @@
+#pragma once
+
+#include <utility>
+#include <boost/asio.hpp>
+#include <boost/asio/awaitable.hpp>
+#include <boost/asio/use_awaitable.hpp>
+#include <iostream>
+#include<vector>
+#include<utility>
+#include <random>
+
+using boost::asio::awaitable;
+using boost::asio::co_spawn;
+using boost::asio::detached;
+using boost::asio::use_awaitable;
+using boost::asio::ip::tcp;
+namespace this_coro = boost::asio::this_coro;
+
+#define UPPER_LIM 100
+
+#define P0_USER_SHARES_FILE "/data/p0_shares/p0_U.txt"
+#define P1_USER_SHARES_FILE "/data/p1_shares/p1_U.txt"
+
+// Item matrix shares (for Assignment 3)
+#define P0_ITEM_SHARES_FILE "/data/p0_shares/p0_V.txt"
+#define P1_ITEM_SHARES_FILE "/data/p1_shares/p1_V.txt"
+
+#define P0_QUERIES_SHARES_FILE "/data/p0_shares/p0_queries.txt"
+#define P1_QUERIES_SHARES_FILE "/data/p1_shares/p1_queries.txt"
+
+#define P0_MULT_SHARES_FILE "/data/p0_shares/p0_mult.txt"
+#define P1_MULT_SHARES_FILE "/data/p1_shares/p1_mult.txt"
+
+inline uint32_t random_uint32() {
+    static std::random_device rd;
+    static std::mt19937 gen(rd());
+    static std::uniform_int_distribution<uint32_t> dis;
+    return dis(gen);
+}
+
+inline int32_t random_pm100() {
+    static thread_local std::mt19937 gen(std::random_device{}());
+    static std::uniform_int_distribution<int32_t> dis(-100, 100);
+    return dis(gen); // returns an int in [-100, 100]
+}
+
+inline uint32_t random_uint32_pm100(uint32_t center) {
+    static thread_local std::mt19937 gen(std::random_device{}());
+    static std::uniform_int_distribution<int> delta(-100, 100);
+    int d = delta(gen);
+    // Do math in wider type; clamp to [0, UINT32_MAX]
+    int64_t v = static_cast<int64_t>(center) + d;
+    if (v < 0) v = 0;
+    if (v > std::numeric_limits<uint32_t>::max()) v = std::numeric_limits<uint32_t>::max();
+    return static_cast<uint32_t>(v);
+}
+
+// Blind by XOR mask
+inline uint32_t blind_value(uint32_t v) {
+    return v ^ 0xDEADBEEF;
+}
+
+struct random_vector{
+    std::vector<long long> data;
+    random_vector() = default;
+    explicit random_vector(size_t k) : data(k) {
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::uniform_int_distribution<> dist(-UPPER_LIM, UPPER_LIM);
+        // Fill vector with random values
+        for (auto &x : data) {
+            x = dist(gen);
+        }
+    }
+    long long& operator[](size_t i) {
+        return data[i];
+    }
+    const long long& operator[](size_t i) const {
+        return data[i];
+    }
+    // Get length
+    size_t size() const {
+        return data.size();
+    }
+
+    bool empty() const {
+        return data.empty();
+    }
+
+    long long dot_product(random_vector& x){
+        long long val = 0;
+        long long k = data.size();
+        for(int i=0;i<k;i++) val += data[i]*x[i];
+        return val;
+    }
+};
+
+struct DuAtAllahClient{
+    random_vector X, Y;
+    long long z;
+
+    DuAtAllahClient() : z(0) {}
+    explicit DuAtAllahClient(int k) : X(k), Y(k), z(0) {}
+};
+
+struct DuAtAllahServer{
+    random_vector X0, X1, Y0, Y1;
+    long long alpha;
+
+    explicit DuAtAllahServer(int k){
+        X0 = random_vector(k);
+        X1 = random_vector(k);
+        Y0 = random_vector(k);
+        Y1 = random_vector(k);
+        alpha = random_pm100();
+    }
+
+    std::pair<DuAtAllahClient, DuAtAllahClient> generate_client_shares(){
+        int k = X0.size();
+        DuAtAllahClient client0(k), client1(k);
+        client0.X = X0;
+        client0.Y = Y0;
+        client0.z = X0.dot_product(Y1) + alpha;
+        client1.X = X1;
+        client1.Y = Y1;
+        client1.z = Y0.dot_product(X1) - alpha;
+        return {client0, client1};
+    }
+};
+
+struct DuAtAllahMultClient{
+    long long x, y, z;
+    DuAtAllahMultClient(): x(0), y(0), z(0) {}
+};
+
+struct DuAtAllahMultServer{
+    long long x0, x1, y1, y0;
+    long long alpha;
+
+    DuAtAllahMultServer() {
+        x0 = random_pm100();
+        x1 = random_pm100();
+        y0 = random_pm100();
+        y1 = random_pm100();
+        alpha = random_pm100();
+    }
+};
+
+// DPF structures for Assignment 3
+struct DPFCorrectionWord {
+    uint64_t dSL, dSR;
+    bool dTL, dTR;
+};
+
+struct DPFKey {
+    uint64_t s0;
+    bool t0;
+    std::vector<DPFCorrectionWord> cws;
+    uint64_t cwOut;
+};

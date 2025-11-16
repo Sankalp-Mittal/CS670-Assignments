@@ -1,0 +1,15 @@
+FROM ubuntu:22.04
+
+RUN apt-get update && apt-get install -y \
+    g++ \
+    libboost-all-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY common.hpp .
+COPY pB.cpp .
+
+RUN g++ -DROLE_p1 -std=c++20 -O2 -I. pB.cpp -o p1 -lboost_system -lpthread
+
+CMD ["./p1"]

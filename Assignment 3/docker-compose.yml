@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  p2:
+    build:
+      context: .
+      dockerfile: Dockerfile.p2
+    container_name: p2_server
+    volumes:
+      - ./data:/data
+    ports:
+      - "9002:9002"
+    networks:
+      - crypto_net
+    command: ./p2
+
+  p0:
+    build:
+      context: .
+      dockerfile: Dockerfile.p0
+    container_name: p0_client
+    depends_on:
+      - p2
+    volumes:
+      - ./data:/data
+    networks:
+      - crypto_net
+    environment:
+      - ROLE=p0
+    command: ./p0
+
+  p1:
+    build:
+      context: .
+      dockerfile: Dockerfile.p1
+    container_name: p1_client
+    depends_on:
+      - p2
+    volumes:
+      - ./data:/data
+    networks:
+      - crypto_net
+    environment:
+      - ROLE=p1
+    command: ./p1
+
+networks:
+  crypto_net:
+    driver: bridge
